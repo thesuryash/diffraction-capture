@@ -1,0 +1,81 @@
+{
+  "projects": [
+    { "name": "Aluminum Expansion", "sessions": 0, "active": true },
+    { "name": "Steel Analysis", "sessions": 0, "active": false },
+    { "name": "Copper Tests", "sessions": 0, "active": false }
+  ],
+  "sessions": [
+    {
+      "title": "Aluminum Sample #3",
+      "date": "Today, 2:30 PM",
+      "images": 0,
+      "temps": 0,
+      "status": "Analyzed",
+      "statusColor": "22C55E",
+      "icon": "folder",
+      "iconColor": "2563EB"
+    },
+    {
+      "title": "Steel Calibration",
+      "date": "Yesterday, 4:15 PM",
+      "images": 0,
+      "temps": 0,
+      "status": "Pending",
+      "statusColor": "F59E0B",
+      "icon": "camera",
+      "iconColor": "F59E0B"
+    },
+    {
+      "title": "Copper Baseline",
+      "date": "Dec 10, 10:20 AM",
+      "images": 0,
+      "temps": 0,
+      "status": "Imported",
+      "statusColor": "0EA5E9",
+      "icon": "file",
+      "iconColor": "8B5CF6"
+    }
+  ],
+  "stats": {
+    "projects": 0,
+    "sessions": 0,
+    "images": 0,
+    "temps": 0
+  },
+  "mobileSessions": [
+    {
+      "name": "Aluminum Test #3",
+      "dateTime": "Dec 14, 2024 • 2:45 PM",
+      "images": 0,
+      "pending": 0,
+      "tempMode": "Prompted",
+      "badge": "Uploaded",
+      "duration": "0m"
+    },
+    {
+      "name": "Steel Sample A1",
+      "dateTime": "Dec 13, 2024 • 10:15 AM",
+      "images": 0,
+      "pending": 0,
+      "tempMode": "Manual",
+      "badge": "Partially uploaded",
+      "duration": "0m"
+    },
+    {
+      "name": "Copper Wire Analysis",
+      "dateTime": "Dec 12, 2024 • 4:30 PM",
+      "images": 0,
+      "pending": 0,
+      "tempMode": "None",
+      "badge": "Local only",
+      "duration": "0m"
+    }
+  ],
+  "uploadQueue": [
+    { "fileName": "IMG_0001.jpg", "capturedAt": "--", "status": "Pending", "retries": 0 },
+    { "fileName": "IMG_0002.jpg", "capturedAt": "--", "status": "Failed", "retries": 1 },
+    { "fileName": "IMG_0003.jpg", "capturedAt": "--", "status": "Uploaded", "retries": 0 }
+  ],
+  "pcConnection": false,
+  "lastSession": null
+}
