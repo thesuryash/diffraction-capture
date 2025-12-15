@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -19,24 +20,91 @@ class DiffractionApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Diffraction Capture',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF2563EB),
-          background: const Color(0xFFF4F5F7),
-          surface: Colors.white,
+    return RoiProvider(
+      notifier: RoiState(),
+      child: MaterialApp(
+        debugShowCheckedModeBanner: false,
+        title: 'Diffraction Capture',
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFF2563EB),
+            background: const Color(0xFFF4F5F7),
+            surface: Colors.white,
+          ),
+          scaffoldBackgroundColor: const Color(0xFFF4F5F7),
+          textTheme: ThemeData.light().textTheme.apply(
+                bodyColor: const Color(0xFF0F172A),
+                displayColor: const Color(0xFF0F172A),
+              ),
+          useMaterial3: true,
         ),
-        scaffoldBackgroundColor: const Color(0xFFF4F5F7),
-        textTheme: ThemeData.light().textTheme.apply(
-              bodyColor: const Color(0xFF0F172A),
-              displayColor: const Color(0xFF0F172A),
-            ),
-        useMaterial3: true,
+        home: const ResponsiveRoot(),
       ),
-      home: const ResponsiveRoot(),
     );
+  }
+}
+
+class RoiState extends ChangeNotifier {
+  static final Rect defaultNormalizedRect = Rect.fromLTWH(0.2, 0.2, 0.6, 0.6);
+
+  Rect _normalizedRect = defaultNormalizedRect;
+  Size? _previewSize;
+
+  Rect get normalizedRect => _normalizedRect;
+  Size? get previewSize => _previewSize;
+
+  void reset() {
+    _normalizedRect = defaultNormalizedRect;
+    notifyListeners();
+  }
+
+  void updateRect(Rect rect) {
+    _normalizedRect = _clampRect(rect);
+    notifyListeners();
+  }
+
+  void updatePreviewSize(Size size) {
+    if (_previewSize == size) return;
+    _previewSize = size;
+    notifyListeners();
+  }
+
+  Rect pixelRectFor(Size size) {
+    final rect = _normalizedRect;
+    return Rect.fromLTWH(
+      rect.left * size.width,
+      rect.top * size.height,
+      rect.width * size.width,
+      rect.height * size.height,
+    );
+  }
+
+  Rect _clampRect(Rect rect) {
+    const double minSize = 0.08;
+    double left = rect.left.clamp(0.0, 1.0);
+    double top = rect.top.clamp(0.0, 1.0);
+    double right = rect.right.clamp(0.0, 1.0);
+    double bottom = rect.bottom.clamp(0.0, 1.0);
+
+    if (right - left < minSize) {
+      right = min(1.0, left + minSize);
+    }
+    if (bottom - top < minSize) {
+      bottom = min(1.0, top + minSize);
+    }
+
+    return Rect.fromLTRB(left, top, right, bottom);
+  }
+}
+
+class RoiProvider extends InheritedNotifier<RoiState> {
+  const RoiProvider({super.key, required RoiState notifier, required Widget child})
+      : super(notifier: notifier, child: child);
+
+  static RoiState of(BuildContext context) {
+    final provider = context.dependOnInheritedWidgetOfExactType<RoiProvider>();
+    assert(provider != null, 'RoiProvider is missing from the widget tree');
+    return provider!.notifier!;
   }
 }
 
@@ -44,6 +112,9 @@ class ResponsiveRoot extends StatelessWidget {
   const ResponsiveRoot({super.key});
 
   bool _isDesktopLayout(BoxConstraints constraints) {
+    if (!kIsWeb && (Platform.isMacOS || Platform.isWindows || Platform.isLinux)) {
+      return true;
+    }
     return constraints.maxWidth > 900 || kIsWeb;
   }
 
@@ -1087,13 +1158,16 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
   bool pairingConnecting = false;
   WebSocketChannel? _pairingChannel;
   StreamSubscription? _pairingSub;
+  bool _pairingTransferred = false;
 
   @override
   void dispose() {
     _nameController.dispose();
     _notesController.dispose();
     _pairingSub?.cancel();
-    _pairingChannel?.sink.close();
+    if (!_pairingTransferred) {
+      _pairingChannel?.sink.close();
+    }
     super.dispose();
   }
 
@@ -1101,19 +1175,24 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
     if (step < 4) {
       setState(() => step += 1);
     } else {
+      final sessionTitle =
+          _nameController.text.isEmpty ? 'New Session' : _nameController.text;
+      _pairingTransferred = true;
+      _pairingSub?.cancel();
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
           builder: (_) => CameraAlignmentScreen(
+            sessionName: sessionTitle,
+            pairingChannel: _pairingChannel,
             onStart: () {
               Navigator.pushReplacement(
                 context,
                 MaterialPageRoute(
                   builder: (_) => ActiveCaptureScreen(
-                    sessionName: _nameController.text.isEmpty
-                        ? 'New Session'
-                        : _nameController.text,
+                    sessionName: sessionTitle,
                     status: CaptureStatus.zero(),
+                    pairingChannel: _pairingChannel,
                   ),
                 ),
               );
@@ -1826,12 +1905,212 @@ class _TabChip extends StatelessWidget {
   }
 }
 
-class CameraAlignmentScreen extends StatelessWidget {
+class CameraAlignmentScreen extends StatefulWidget {
   final VoidCallback onStart;
-  const CameraAlignmentScreen({super.key, required this.onStart});
+  final String sessionName;
+  final WebSocketChannel? pairingChannel;
+
+  const CameraAlignmentScreen({
+    super.key,
+    required this.onStart,
+    required this.sessionName,
+    this.pairingChannel,
+  });
+
+  @override
+  State<CameraAlignmentScreen> createState() => _CameraAlignmentScreenState();
+}
+
+class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
+  Rect? _dragRect;
+  late final MobileScannerController _cameraController;
+  bool _exposureLocked = false;
+  bool _focusLocked = false;
+  bool _whiteBalanceLocked = false;
+  bool _startingSession = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _cameraController = MobileScannerController();
+  }
+
+  @override
+  void dispose() {
+    _cameraController.dispose();
+    super.dispose();
+  }
+
+  void _resetRoi(RoiState state) {
+    state.reset();
+    setState(() {
+      _dragRect = state.normalizedRect;
+    });
+  }
+
+  void _updateRect(RoiState state, Rect rect) {
+    state.updateRect(rect);
+    setState(() {
+      _dragRect = state.normalizedRect;
+    });
+  }
+
+  void _toggleLock({
+    bool? exposure,
+    bool? focus,
+    bool? whiteBalance,
+  }) {
+    setState(() {
+      if (exposure != null) _exposureLocked = exposure;
+      if (focus != null) _focusLocked = focus;
+      if (whiteBalance != null) _whiteBalanceLocked = whiteBalance;
+    });
+
+    if (widget.pairingChannel != null) {
+      try {
+        widget.pairingChannel!.sink.add(jsonEncode({
+          'type': 'lock_update',
+          'timestamp': DateTime.now().toIso8601String(),
+          'session': widget.sessionName,
+          'locks': {
+            'exposure': _exposureLocked,
+            'focus': _focusLocked,
+            'whiteBalance': _whiteBalanceLocked,
+          },
+        }));
+      } catch (e) {
+        debugPrint('Failed to send lock update: $e');
+      }
+    }
+  }
+
+  void _handleResize(DragUpdateDetails details, Size size, RoiState state,
+      {bool left = false, bool right = false, bool top = false, bool bottom = false}) {
+    final current = _dragRect ?? state.normalizedRect;
+    double l = current.left;
+    double r = current.right;
+    double t = current.top;
+    double b = current.bottom;
+
+    final dx = details.delta.dx / size.width;
+    final dy = details.delta.dy / size.height;
+
+    if (left) l += dx;
+    if (right) r += dx;
+    if (top) t += dy;
+    if (bottom) b += dy;
+
+    _updateRect(state, Rect.fromLTRB(l, t, r, b));
+  }
+
+  void _handleMove(DragUpdateDetails details, Size size, RoiState state) {
+    final current = _dragRect ?? state.normalizedRect;
+    final dx = details.delta.dx / size.width;
+    final dy = details.delta.dy / size.height;
+    _updateRect(
+      state,
+      Rect.fromLTWH(
+        current.left + dx,
+        current.top + dy,
+        current.width,
+        current.height,
+      ),
+    );
+  }
+
+  Future<void> _startSession(RoiState state) async {
+    if (_startingSession) return;
+    setState(() {
+      _startingSession = true;
+    });
+
+    final previewSize = state.previewSize ?? const Size(1080, 1920);
+    final roiPixels = state.pixelRectFor(previewSize);
+
+    if (widget.pairingChannel != null) {
+      try {
+        widget.pairingChannel!.sink.add(jsonEncode({
+          'type': 'session_start',
+          'session': widget.sessionName,
+          'timestamp': DateTime.now().toIso8601String(),
+          'roi': {
+            'normalized': {
+              'left': state.normalizedRect.left,
+              'top': state.normalizedRect.top,
+              'width': state.normalizedRect.width,
+              'height': state.normalizedRect.height,
+            },
+            'pixels': {
+              'x': roiPixels.left,
+              'y': roiPixels.top,
+              'width': roiPixels.width,
+              'height': roiPixels.height,
+            },
+            'previewSize': {
+              'width': previewSize.width,
+              'height': previewSize.height,
+            },
+          },
+          'locks': {
+            'exposure': _exposureLocked,
+            'focus': _focusLocked,
+            'whiteBalance': _whiteBalanceLocked,
+          },
+        }));
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Session started and sent to desktop')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to notify desktop: $e')),
+          );
+        }
+      }
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Starting locally (no desktop pairing)')),
+        );
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _startingSession = false;
+      });
+      widget.onStart();
+    }
+  }
+
+  Widget _handleAt(Offset position, Size size, RoiState state,
+      {bool left = false, bool right = false, bool top = false, bool bottom = false}) {
+    const double handleSize = 18;
+    return Positioned(
+      left: position.dx - handleSize / 2,
+      top: position.dy - handleSize / 2,
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onPanUpdate: (details) =>
+            _handleResize(details, size, state, left: left, right: right, top: top, bottom: bottom),
+        child: Container(
+          width: handleSize,
+          height: handleSize,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border.all(color: Colors.blue.shade400, width: 2),
+            shape: BoxShape.circle,
+          ),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final roiState = RoiProvider.of(context);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Camera Alignment / ROI'),
@@ -1845,56 +2124,130 @@ class CameraAlignmentScreen extends StatelessWidget {
         child: Column(
           children: [
             Expanded(
-              child: Container(
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  color: Colors.black,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Stack(
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 180,
-                        height: 240,
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.white70, width: 2),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final size = Size(constraints.maxWidth, constraints.maxHeight);
+                    roiState.updatePreviewSize(size);
+                    final normalized = _dragRect ?? roiState.normalizedRect;
+                    final roiPixels = Rect.fromLTWH(
+                      normalized.left * size.width,
+                      normalized.top * size.height,
+                      normalized.width * size.width,
+                      normalized.height * size.height,
+                    );
+
+                    return Stack(
+                      children: [
+                        MobileScanner(
+                          controller: _cameraController,
+                          fit: BoxFit.cover,
+                          onDetect: (_) {},
                         ),
-                      ),
-                    ),
-                    Center(
-                      child: Container(
-                        width: 12,
-                        height: 12,
-                        decoration: const BoxDecoration(
-                          color: Colors.white,
-                          shape: BoxShape.circle,
+                        Positioned.fill(
+                          child: Container(
+                            color: Colors.black.withOpacity(0.15),
+                          ),
                         ),
-                      ),
-                    ),
-                    Positioned(
-                      bottom: 12,
-                      left: 12,
-                      child: Row(
-                        children: const [
-                          Icon(Icons.brightness_6, color: Colors.white70),
-                          SizedBox(width: 6),
-                          Text('Brightness OK', style: TextStyle(color: Colors.white70)),
-                        ],
-                      ),
-                    ),
-                    Positioned(
-                      bottom: 12,
-                      right: 12,
-                      child: Row(
-                        children: const [
-                          Icon(Icons.center_focus_strong, color: Colors.white70),
-                          SizedBox(width: 6),
-                          Text('Sharpness OK', style: TextStyle(color: Colors.white70)),
-                        ],
-                      ),
-                    ),
-                  ],
+                        Positioned(
+                          left: roiPixels.left,
+                          top: roiPixels.top,
+                          width: roiPixels.width,
+                          height: roiPixels.height,
+                          child: GestureDetector(
+                            onPanUpdate: (details) => _handleMove(details, size, roiState),
+                            child: Container(
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.blueAccent, width: 3),
+                                color: Colors.white.withOpacity(0.08),
+                              ),
+                            ),
+                          ),
+                        ),
+                        _handleAt(roiPixels.topLeft, size, roiState,
+                            left: true, top: true),
+                        _handleAt(roiPixels.topRight, size, roiState,
+                            right: true, top: true),
+                        _handleAt(roiPixels.bottomLeft, size, roiState,
+                            left: true, bottom: true),
+                        _handleAt(roiPixels.bottomRight, size, roiState,
+                            right: true, bottom: true),
+                        Positioned(
+                          top: 12,
+                          left: 12,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.6),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'ROI ${roiPixels.width.toStringAsFixed(0)} x ${roiPixels.height.toStringAsFixed(0)} px',
+                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                                ),
+                                Text(
+                                  'x:${roiPixels.left.toStringAsFixed(0)}  y:${roiPixels.top.toStringAsFixed(0)}',
+                                  style: const TextStyle(color: Colors.white70),
+                                ),
+                                Text(
+                                  'Session: ${widget.sessionName}',
+                                  style: const TextStyle(color: Colors.white70),
+                                ),
+                                Text(
+                                  widget.pairingChannel != null
+                                      ? 'Desktop link ready'
+                                      : 'Not paired to desktop',
+                                  style: TextStyle(
+                                    color: widget.pairingChannel != null
+                                        ? Colors.lightGreenAccent
+                                        : Colors.orangeAccent,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          bottom: 12,
+                          left: 12,
+                          child: Row(
+                            children: [
+                              const Icon(Icons.brightness_6, color: Colors.white70),
+                              const SizedBox(width: 6),
+                              Text(
+                                _exposureLocked ? 'Exposure locked' : 'Brightness OK',
+                                style: const TextStyle(color: Colors.white70),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Positioned(
+                          bottom: 12,
+                          right: 12,
+                          child: Row(
+                            children: [
+                              Icon(
+                                _focusLocked
+                                    ? Icons.center_focus_weak_outlined
+                                    : Icons.center_focus_strong,
+                                color: Colors.white70,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                _focusLocked ? 'Focus locked' : 'Sharpness OK',
+                                style: const TextStyle(color: Colors.white70),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
               ),
             ),
@@ -1905,18 +2258,47 @@ class CameraAlignmentScreen extends StatelessWidget {
               children: [
                 FilterChip(
                   label: const Text('Lock exposure'),
-                  selected: false,
-                  onSelected: (_) {},
+                  selected: _exposureLocked,
+                  onSelected: (value) {
+                    _toggleLock(exposure: value);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          value ? 'Exposure locked' : 'Exposure auto adjusts',
+                        ),
+                      ),
+                    );
+                  },
                 ),
                 FilterChip(
                   label: const Text('Lock focus'),
-                  selected: false,
-                  onSelected: (_) {},
+                  selected: _focusLocked,
+                  onSelected: (value) {
+                    _toggleLock(focus: value);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          value ? 'Focus locked' : 'Focus auto adjusts',
+                        ),
+                      ),
+                    );
+                  },
                 ),
                 FilterChip(
                   label: const Text('Lock white balance'),
-                  selected: false,
-                  onSelected: (_) {},
+                  selected: _whiteBalanceLocked,
+                  onSelected: (value) {
+                    _toggleLock(whiteBalance: value);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          value
+                              ? 'White balance locked'
+                              : 'White balance auto adjusts',
+                        ),
+                      ),
+                    );
+                  },
                 ),
               ],
             ),
@@ -1925,15 +2307,25 @@ class CameraAlignmentScreen extends StatelessWidget {
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: () {},
+                    onPressed: () => _resetRoi(roiState),
                     child: const Text('Reset ROI'),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: onStart,
-                    child: const Text('Start Session'),
+                    onPressed: _startingSession
+                        ? null
+                        : () async {
+                            await _startSession(roiState);
+                          },
+                    child: _startingSession
+                        ? const SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Start Session'),
                   ),
                 ),
               ],
@@ -1953,23 +2345,89 @@ class CaptureStatus {
   factory CaptureStatus.zero() => const CaptureStatus(captured: 0, pending: 0, uploaded: 0);
 }
 
-class ActiveCaptureScreen extends StatelessWidget {
+class ActiveCaptureScreen extends StatefulWidget {
   final String sessionName;
   final CaptureStatus status;
+  final WebSocketChannel? pairingChannel;
 
-  const ActiveCaptureScreen({super.key, required this.sessionName, required this.status});
+  const ActiveCaptureScreen({
+    super.key,
+    required this.sessionName,
+    required this.status,
+    this.pairingChannel,
+  });
+
+  @override
+  State<ActiveCaptureScreen> createState() => _ActiveCaptureScreenState();
+}
+
+class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
+  String? _lastSendSummary;
+
+  @override
+  void dispose() {
+    widget.pairingChannel?.sink.close();
+    super.dispose();
+  }
+
+  Future<void> _sendCapture(RoiState roiState) async {
+    final size = roiState.previewSize ?? const Size(1080, 1920);
+    final roiPixels = roiState.pixelRectFor(size);
+    final payload = {
+      'type': 'frame',
+      'session': widget.sessionName,
+      'timestamp': DateTime.now().toIso8601String(),
+      'roi': {
+        'normalized': {
+          'left': roiState.normalizedRect.left,
+          'top': roiState.normalizedRect.top,
+          'width': roiState.normalizedRect.width,
+          'height': roiState.normalizedRect.height,
+        },
+        'pixels': {
+          'x': roiPixels.left,
+          'y': roiPixels.top,
+          'width': roiPixels.width,
+          'height': roiPixels.height,
+        },
+        'previewSize': {'width': size.width, 'height': size.height},
+      },
+      'frame': base64Encode(
+        utf8.encode('roi-demo-${DateTime.now().millisecondsSinceEpoch}'),
+      ),
+    };
+
+    try {
+      widget.pairingChannel?.sink.add(jsonEncode(payload));
+      setState(() {
+        _lastSendSummary =
+            'Sent ROI ${roiPixels.width.toStringAsFixed(0)}x${roiPixels.height.toStringAsFixed(0)} at (${roiPixels.left.toStringAsFixed(0)}, ${roiPixels.top.toStringAsFixed(0)})';
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Capture sent with ROI metadata')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to send capture: $e')),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final roiState = RoiProvider.of(context);
+    final connected = widget.pairingChannel != null;
     return Scaffold(
       appBar: AppBar(
-        title: Text(sessionName),
+        title: Text(widget.sessionName),
         actions: [
           IconButton(
             onPressed: () => Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => UploadQueueScreen(status: status, items: const []),
+                builder: (_) => UploadQueueScreen(status: widget.status, items: const []),
               ),
             ),
             icon: const Icon(Icons.cloud_upload_outlined),
@@ -1982,24 +2440,65 @@ class ActiveCaptureScreen extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
-              children: const [
-                Icon(Icons.circle, color: Colors.red, size: 12),
-                SizedBox(width: 6),
-                Text('Not connected'),
-                Spacer(),
-                Text('00:00:00'),
+              children: [
+                Icon(Icons.circle, color: connected ? Colors.green : Colors.red, size: 12),
+                const SizedBox(width: 6),
+                Text(connected ? 'Connected to desktop' : 'Not connected'),
+                const Spacer(),
+                const Text('00:00:00'),
               ],
             ),
             const SizedBox(height: 12),
             Expanded(
-              child: Container(
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  color: Colors.black,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: const Center(
-                  child: Icon(Icons.play_circle_outline, color: Colors.white70, size: 48),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final size = Size(constraints.maxWidth, constraints.maxHeight);
+                    roiState.updatePreviewSize(size);
+                    final roiPixels = roiState.pixelRectFor(size);
+                    return Stack(
+                      children: [
+                        Container(color: Colors.black),
+                        Positioned(
+                          left: roiPixels.left,
+                          top: roiPixels.top,
+                          width: roiPixels.width,
+                          height: roiPixels.height,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.blueAccent, width: 3),
+                              color: Colors.white.withOpacity(0.05),
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          top: 12,
+                          right: 12,
+                          child: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.6),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'ROI ${roiPixels.width.toStringAsFixed(0)}x${roiPixels.height.toStringAsFixed(0)}',
+                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                ),
+                                Text(
+                                  'x:${roiPixels.left.toStringAsFixed(0)} y:${roiPixels.top.toStringAsFixed(0)}',
+                                  style: const TextStyle(color: Colors.white70),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
               ),
             ),
@@ -2009,7 +2508,7 @@ class ActiveCaptureScreen extends StatelessWidget {
               runSpacing: 8,
               children: [
                 ElevatedButton.icon(
-                  onPressed: () {},
+                  onPressed: connected ? () => _sendCapture(roiState) : null,
                   icon: const Icon(Icons.camera_alt_outlined),
                   label: const Text('Capture Now'),
                 ),
@@ -2043,6 +2542,17 @@ class ActiveCaptureScreen extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 12),
+            if (_lastSendSummary != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Row(
+                  children: [
+                    const Icon(Icons.check_circle, color: Colors.green),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(_lastSendSummary!)),
+                  ],
+                ),
+              ),
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(12),
@@ -2054,16 +2564,16 @@ class ActiveCaptureScreen extends StatelessWidget {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  _UploadStat(label: 'Captured', value: status.captured),
-                  _UploadStat(label: 'Pending', value: status.pending),
-                  _UploadStat(label: 'Uploaded', value: status.uploaded),
+                  _UploadStat(label: 'Captured', value: widget.status.captured),
+                  _UploadStat(label: 'Pending', value: widget.status.pending),
+                  _UploadStat(label: 'Uploaded', value: widget.status.uploaded),
                   TextButton(
                     onPressed: () {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
                           builder: (_) => UploadQueueScreen(
-                            status: status,
+                            status: widget.status,
                             items: const [],
                           ),
                         ),
@@ -2090,7 +2600,7 @@ class ActiveCaptureScreen extends StatelessWidget {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => SessionSummaryScreen(status: status),
+                          builder: (_) => SessionSummaryScreen(status: widget.status),
                         ),
                       );
                     },
@@ -2098,7 +2608,7 @@ class ActiveCaptureScreen extends StatelessWidget {
                   ),
                 ),
               ],
-            )
+            ),
           ],
         ),
       ),
@@ -2695,6 +3205,13 @@ class PairingCard extends StatelessWidget {
                   style: const TextStyle(color: Color(0xFF6B7280)),
                 ),
               ],
+              if (state.lastFrameSummary != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Last ROI frame: ${state.lastFrameSummary}',
+                  style: const TextStyle(color: Color(0xFF0F172A), fontWeight: FontWeight.w600),
+                ),
+              ],
             ],
           ),
         );
@@ -2710,6 +3227,7 @@ class PairingServerState {
   final String? qrData;
   final String displayHost;
   final String? lastMessage;
+  final String? lastFrameSummary;
 
   const PairingServerState({
     required this.running,
@@ -2718,6 +3236,7 @@ class PairingServerState {
     required this.qrData,
     required this.displayHost,
     required this.lastMessage,
+    required this.lastFrameSummary,
   });
 
   PairingServerState copyWith({
@@ -2727,6 +3246,7 @@ class PairingServerState {
     String? qrData,
     String? displayHost,
     String? lastMessage,
+    String? lastFrameSummary,
   }) {
     return PairingServerState(
       running: running ?? this.running,
@@ -2735,6 +3255,7 @@ class PairingServerState {
       qrData: qrData ?? this.qrData,
       displayHost: displayHost ?? this.displayHost,
       lastMessage: lastMessage ?? this.lastMessage,
+      lastFrameSummary: lastFrameSummary ?? this.lastFrameSummary,
     );
   }
 }
@@ -2751,6 +3272,7 @@ class PairingHost {
     qrData: null,
     displayHost: '',
     lastMessage: null,
+    lastFrameSummary: null,
   ));
 
   HttpServer? _server;
@@ -2810,10 +3332,26 @@ class PairingHost {
         status: 'Paired with ${request.connectionInfo?.remoteAddress.address ?? 'device'}',
       );
       socket.listen((data) {
-        state.value = state.value.copyWith(lastMessage: data?.toString());
+        final raw = data?.toString();
+        try {
+          final payload = jsonDecode(raw ?? '');
+          if (payload is Map && payload['type'] == 'frame') {
+            final roi = payload['roi'] as Map?;
+            final pixels = roi?['pixels'] as Map?;
+            final summary = pixels != null
+                ? 'ROI ${_fmtNum(pixels['width'])}x${_fmtNum(pixels['height'])} at (${_fmtNum(pixels['x'])}, ${_fmtNum(pixels['y'])})'
+                : 'ROI frame received';
+            state.value = state.value.copyWith(
+              lastMessage: raw,
+              lastFrameSummary: summary,
+            );
+            return;
+          }
+        } catch (_) {}
+        state.value = state.value.copyWith(lastMessage: raw);
       }, onDone: () {
-        state.value =
-            state.value.copyWith(connected: false, status: 'Disconnected');
+        state.value = state.value
+            .copyWith(connected: false, status: 'Disconnected', lastFrameSummary: null);
       });
       socket.add(jsonEncode({
         'type': 'ack',
@@ -2831,5 +3369,12 @@ class PairingHost {
     const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
     final rand = Random.secure();
     return List.generate(12, (_) => chars[rand.nextInt(chars.length)]).join();
+  }
+
+  String _fmtNum(dynamic value) {
+    if (value is num) {
+      return value.toStringAsFixed(0);
+    }
+    return value?.toString() ?? '?';
   }
 }
