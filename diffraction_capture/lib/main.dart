@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
+import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -19,24 +21,91 @@ class DiffractionApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Diffraction Capture',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF2563EB),
-          background: const Color(0xFFF4F5F7),
-          surface: Colors.white,
+    return RoiProvider(
+      notifier: RoiState(),
+      child: MaterialApp(
+        debugShowCheckedModeBanner: false,
+        title: 'Diffraction Capture',
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFF2563EB),
+            background: const Color(0xFFF4F5F7),
+            surface: Colors.white,
+          ),
+          scaffoldBackgroundColor: const Color(0xFFF4F5F7),
+          textTheme: ThemeData.light().textTheme.apply(
+                bodyColor: const Color(0xFF0F172A),
+                displayColor: const Color(0xFF0F172A),
+              ),
+          useMaterial3: true,
         ),
-        scaffoldBackgroundColor: const Color(0xFFF4F5F7),
-        textTheme: ThemeData.light().textTheme.apply(
-              bodyColor: const Color(0xFF0F172A),
-              displayColor: const Color(0xFF0F172A),
-            ),
-        useMaterial3: true,
+        home: const ResponsiveRoot(),
       ),
-      home: const ResponsiveRoot(),
     );
+  }
+}
+
+class RoiState extends ChangeNotifier {
+  static final Rect defaultNormalizedRect = Rect.fromLTWH(0.2, 0.2, 0.6, 0.6);
+
+  Rect _normalizedRect = defaultNormalizedRect;
+  Size? _previewSize;
+
+  Rect get normalizedRect => _normalizedRect;
+  Size? get previewSize => _previewSize;
+
+  void reset() {
+    _normalizedRect = defaultNormalizedRect;
+    notifyListeners();
+  }
+
+  void updateRect(Rect rect) {
+    _normalizedRect = _clampRect(rect);
+    notifyListeners();
+  }
+
+  void updatePreviewSize(Size size) {
+    if (_previewSize == size) return;
+    _previewSize = size;
+    notifyListeners();
+  }
+
+  Rect pixelRectFor(Size size) {
+    final rect = _normalizedRect;
+    return Rect.fromLTWH(
+      rect.left * size.width,
+      rect.top * size.height,
+      rect.width * size.width,
+      rect.height * size.height,
+    );
+  }
+
+  Rect _clampRect(Rect rect) {
+    const double minSize = 0.08;
+    double left = rect.left.clamp(0.0, 1.0);
+    double top = rect.top.clamp(0.0, 1.0);
+    double right = rect.right.clamp(0.0, 1.0);
+    double bottom = rect.bottom.clamp(0.0, 1.0);
+
+    if (right - left < minSize) {
+      right = min(1.0, left + minSize);
+    }
+    if (bottom - top < minSize) {
+      bottom = min(1.0, top + minSize);
+    }
+
+    return Rect.fromLTRB(left, top, right, bottom);
+  }
+}
+
+class RoiProvider extends InheritedNotifier<RoiState> {
+  const RoiProvider({super.key, required RoiState notifier, required Widget child})
+      : super(notifier: notifier, child: child);
+
+  static RoiState of(BuildContext context) {
+    final provider = context.dependOnInheritedWidgetOfExactType<RoiProvider>();
+    assert(provider != null, 'RoiProvider is missing from the widget tree');
+    return provider!.notifier!;
   }
 }
 
@@ -44,6 +113,9 @@ class ResponsiveRoot extends StatelessWidget {
   const ResponsiveRoot({super.key});
 
   bool _isDesktopLayout(BoxConstraints constraints) {
+    if (!kIsWeb && (Platform.isMacOS || Platform.isWindows || Platform.isLinux)) {
+      return true;
+    }
     return constraints.maxWidth > 900 || kIsWeb;
   }
 
@@ -85,12 +157,174 @@ class DesktopDashboard extends StatefulWidget {
 }
 
 class _DesktopDashboardState extends State<DesktopDashboard> {
+  late List<ProjectData> _projects;
+  late List<SessionData> _sessions;
+  Stats? _stats;
+  ProjectData? _activeProject;
+  final ScrollController _mainScroll = ScrollController();
+
   @override
   void initState() {
     super.initState();
-    if (!kIsWeb && (Platform.isMacOS || Platform.isWindows || Platform.isLinux)) {
-      PairingHost.instance.ensureStarted();
+    _projects = widget.data.projects;
+    _sessions = widget.data.sessions;
+    _stats = widget.data.stats;
+    _activeProject = _projects.isEmpty
+        ? null
+        : _projects.firstWhere(
+            (p) => p.isActive,
+            orElse: () => _projects.first,
+          );
+    if (!kIsWeb && (Platform.isMacOS || Platform.isWindows || Platform.isLinux) &&
+        _activeProject != null) {
+      PairingHost.instance.startForProject(_activeProject!.name);
     }
+  }
+
+  @override
+  void dispose() {
+    PairingHost.instance.stop();
+    _mainScroll.dispose();
+    super.dispose();
+  }
+
+  void _setActiveProject(ProjectData? project) {
+    setState(() {
+      _activeProject = project;
+      _projects = _projects
+          .map(
+            (p) => p.copyWith(isActive: project != null && p.name == project.name),
+          )
+          .toList();
+    });
+    if (!kIsWeb && (Platform.isMacOS || Platform.isWindows || Platform.isLinux)) {
+      if (project != null) {
+        PairingHost.instance.startForProject(project.name);
+      } else {
+        PairingHost.instance.stop();
+      }
+    }
+  }
+
+  void _showSnack(BuildContext context, String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _createProject(BuildContext context) async {
+    final controller = TextEditingController();
+    final created = await showDialog<ProjectData>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('New Project'),
+          content: TextField(
+            controller: controller,
+            decoration: const InputDecoration(labelText: 'Project name'),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () {
+                if (controller.text.trim().isEmpty) return;
+                Navigator.pop(
+                  ctx,
+                  ProjectData(name: controller.text.trim(), sessions: 0, isActive: true),
+                );
+              },
+              child: const Text('Create'),
+            )
+          ],
+        );
+      },
+    );
+
+    if (created != null) {
+      setState(() {
+        _projects = [
+          created,
+          ..._projects.map((p) => p.copyWith(isActive: false)),
+        ];
+        _activeProject = created;
+      });
+      _showSnack(context, 'Project "${created.name}" created');
+    }
+  }
+
+  void _openSettings(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Settings'),
+        content: const Text('Settings panel coming soon. Pairing and projects are active.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+        ],
+      ),
+    );
+  }
+
+  void _importData(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Import Data'),
+        content: const Text(
+            'Drag a session archive into this window to import. For now this will simulate a successful import.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              setState(() {
+                final extra = SessionData(
+                  title: 'Imported Session ${_sessions.length + 1}',
+                  date: DateTime.now().toIso8601String().split('T').first,
+                  images: 3,
+                  temps: 1,
+                  status: 'Imported',
+                  statusColor: const Color(0xFF22C55E),
+                  icon: Icons.file_upload_outlined,
+                  iconColor: const Color(0xFF8B5CF6),
+                );
+                _sessions = [extra, ..._sessions];
+                _stats = _stats?.copyWith(
+                  sessions: (_stats?.sessions ?? 0) + 1,
+                  images: (_stats?.images ?? 0) + extra.images,
+                );
+              });
+              _showSnack(context, 'Import completed and added to recent sessions');
+            },
+            child: const Text('Simulate Import'),
+          )
+        ],
+      ),
+    );
+  }
+
+  void _connectPhone(BuildContext context) {
+    if (_activeProject == null) {
+      _showSnack(context, 'Select or create a project before pairing.');
+      return;
+    }
+    PairingHost.instance.startForProject(_activeProject!.name);
+    _showSnack(context, 'Pairing service ready for ${_activeProject!.name}.');
+  }
+
+  void _openSession(SessionData session) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(session.title),
+        content: Text('Captured on ${session.date}\n${session.images} images • ${session.temps} temps'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+        ],
+      ),
+    );
+  }
+
+  void _viewAllSessions() {
+    _mainScroll.animateTo(0, duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
   }
 
   @override
@@ -105,19 +339,33 @@ class _DesktopDashboardState extends State<DesktopDashboard> {
               children: [
                 SizedBox(
                   width: 280,
-                  child: _Sidebar(projects: widget.data.projects),
+                  child: _Sidebar(
+                    projects: _projects,
+                    activeProject: _activeProject,
+                    onProjectSelected: _setActiveProject,
+                    pairingCard: PairingCard(activeProject: _activeProject),
+                  ),
                 ),
                 const SizedBox(width: 16),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Header(),
+                      Header(
+                        onNewProject: () => _createProject(context),
+                        onOpenSettings: () => _openSettings(context),
+                      ),
                       const SizedBox(height: 16),
                       Expanded(
                         child: _MainContent(
-                          sessions: widget.data.sessions,
-                          stats: widget.data.stats,
+                          sessions: _sessions,
+                          stats: _stats ?? widget.data.stats,
+                          onNewProject: () => _createProject(context),
+                          onImport: () => _importData(context),
+                          onConnectPhone: () => _connectPhone(context),
+                          onOpenSession: _openSession,
+                          onViewAll: _viewAllSessions,
+                          scrollController: _mainScroll,
                         ),
                       ),
                     ],
@@ -133,7 +381,10 @@ class _DesktopDashboardState extends State<DesktopDashboard> {
 }
 
 class Header extends StatelessWidget {
-  const Header({super.key});
+  final VoidCallback onNewProject;
+  final VoidCallback onOpenSettings;
+
+  const Header({super.key, required this.onNewProject, required this.onOpenSettings});
 
   @override
   Widget build(BuildContext context) {
@@ -179,7 +430,7 @@ class Header extends StatelessWidget {
           ),
           const Spacer(),
           ElevatedButton.icon(
-            onPressed: () {},
+            onPressed: onNewProject,
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFF2563EB),
               foregroundColor: Colors.white,
@@ -194,7 +445,7 @@ class Header extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           IconButton(
-            onPressed: () {},
+            onPressed: onOpenSettings,
             icon: const Icon(Icons.settings_outlined),
             color: const Color(0xFF4B5563),
           )
@@ -207,15 +458,28 @@ class Header extends StatelessWidget {
 class _MainContent extends StatelessWidget {
   final List<SessionData> sessions;
   final Stats stats;
+  final VoidCallback onNewProject;
+  final VoidCallback onImport;
+  final VoidCallback onConnectPhone;
+  final VoidCallback onViewAll;
+  final ValueChanged<SessionData> onOpenSession;
+  final ScrollController scrollController;
 
   const _MainContent({
     required this.sessions,
     required this.stats,
+    required this.onNewProject,
+    required this.onImport,
+    required this.onConnectPhone,
+    required this.onViewAll,
+    required this.onOpenSession,
+    required this.scrollController,
   });
 
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
+      controller: scrollController,
       padding: const EdgeInsets.only(bottom: 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -240,24 +504,27 @@ class _MainContent extends StatelessWidget {
           Wrap(
             spacing: 12,
             runSpacing: 12,
-            children: const [
+            children: [
               _ActionCard(
                 icon: Icons.add_box_outlined,
                 title: 'New Project',
                 subtitle: 'Start a new analysis project',
-                color: Color(0xFF2563EB),
+                color: const Color(0xFF2563EB),
+                onTap: onNewProject,
               ),
               _ActionCard(
                 icon: Icons.smartphone_outlined,
                 title: 'Connect Phone',
                 subtitle: 'Receive live capture data',
-                color: Color(0xFF22C55E),
+                color: const Color(0xFF22C55E),
+                onTap: onConnectPhone,
               ),
               _ActionCard(
                 icon: Icons.file_upload_outlined,
                 title: 'Import Data',
                 subtitle: 'Load existing session files',
-                color: Color(0xFF8B5CF6),
+                color: const Color(0xFF8B5CF6),
+                onTap: onImport,
               ),
             ],
           ),
@@ -277,7 +544,7 @@ class _MainContent extends StatelessWidget {
                     ),
                     const Spacer(),
                     TextButton(
-                      onPressed: () {},
+                      onPressed: onViewAll,
                       child: const Text('View All'),
                     ),
                   ],
@@ -294,6 +561,7 @@ class _MainContent extends StatelessWidget {
                             '${sessions[i].date} • ${sessions[i].images} images • ${sessions[i].temps} temp records',
                         statusLabel: sessions[i].status,
                         statusColor: sessions[i].statusColor,
+                        onOpen: () => onOpenSession(sessions[i]),
                       ),
                       if (i != sessions.length - 1) const Divider(height: 24),
                     ]
@@ -312,8 +580,17 @@ class _MainContent extends StatelessWidget {
 
 class _Sidebar extends StatelessWidget {
   final List<ProjectData> projects;
+  final ProjectData? activeProject;
+  final ValueChanged<ProjectData?> onProjectSelected;
+  final Widget pairingCard;
 
-  const _Sidebar({super.key, required this.projects});
+  const _Sidebar({
+    super.key,
+    required this.projects,
+    required this.activeProject,
+    required this.onProjectSelected,
+    required this.pairingCard,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -338,13 +615,16 @@ class _Sidebar extends StatelessWidget {
                 final isActive = project.isActive;
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 10),
-                  child: _SelectableTile(
-                    title: project.name,
-                    subtitle: '${project.sessions} sessions',
-                    icon: isActive
-                        ? Icons.folder_special
-                        : Icons.folder_outlined,
-                    isSelected: isActive,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: () => onProjectSelected(project),
+                    child: _SelectableTile(
+                      title: project.name,
+                      subtitle: '${project.sessions} sessions',
+                      icon:
+                          isActive ? Icons.folder_special : Icons.folder_outlined,
+                      isSelected: isActive,
+                    ),
                   ),
                 );
               }),
@@ -352,7 +632,7 @@ class _Sidebar extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 10),
-        const PairingCard(),
+        pairingCard,
       ],
     );
   }
@@ -472,55 +752,64 @@ class _ActionCard extends StatelessWidget {
   final String title;
   final String subtitle;
   final Color color;
+  final VoidCallback? onTap;
 
   const _ActionCard({
     required this.icon,
     required this.title,
     required this.subtitle,
     required this.color,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
       width: 310,
-      child: _Card(
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(
-                icon,
-                color: color,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                  ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: _Card(
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  subtitle,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: Color(0xFF6B7280),
-                  ),
+                child: Icon(
+                  icon,
+                  color: color,
                 ),
-              ],
-            )
-          ],
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: Color(0xFF6B7280),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right, color: Color(0xFF9CA3AF)),
+            ],
+          ),
         ),
       ),
     );
@@ -534,6 +823,7 @@ class SessionRow extends StatelessWidget {
   final String meta;
   final String statusLabel;
   final Color statusColor;
+  final VoidCallback? onOpen;
 
   const SessionRow({
     super.key,
@@ -543,6 +833,7 @@ class SessionRow extends StatelessWidget {
     required this.meta,
     required this.statusLabel,
     required this.statusColor,
+    this.onOpen,
   });
 
   @override
@@ -587,7 +878,7 @@ class SessionRow extends StatelessWidget {
         ),
         const SizedBox(width: 8),
         IconButton(
-          onPressed: () {},
+          onPressed: onOpen,
           icon: const Icon(Icons.chevron_right),
           color: const Color(0xFF9CA3AF),
         ),
@@ -1087,13 +1378,16 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
   bool pairingConnecting = false;
   WebSocketChannel? _pairingChannel;
   StreamSubscription? _pairingSub;
+  bool _pairingTransferred = false;
 
   @override
   void dispose() {
     _nameController.dispose();
     _notesController.dispose();
     _pairingSub?.cancel();
-    _pairingChannel?.sink.close();
+    if (!_pairingTransferred) {
+      _pairingChannel?.sink.close();
+    }
     super.dispose();
   }
 
@@ -1101,19 +1395,24 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
     if (step < 4) {
       setState(() => step += 1);
     } else {
+      final sessionTitle =
+          _nameController.text.isEmpty ? 'New Session' : _nameController.text;
+      _pairingTransferred = true;
+      _pairingSub?.cancel();
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
           builder: (_) => CameraAlignmentScreen(
+            sessionName: sessionTitle,
+            pairingChannel: _pairingChannel,
             onStart: () {
               Navigator.pushReplacement(
                 context,
                 MaterialPageRoute(
                   builder: (_) => ActiveCaptureScreen(
-                    sessionName: _nameController.text.isEmpty
-                        ? 'New Session'
-                        : _nameController.text,
+                    sessionName: sessionTitle,
                     status: CaptureStatus.zero(),
+                    pairingChannel: _pairingChannel,
                   ),
                 ),
               );
@@ -1826,12 +2125,212 @@ class _TabChip extends StatelessWidget {
   }
 }
 
-class CameraAlignmentScreen extends StatelessWidget {
+class CameraAlignmentScreen extends StatefulWidget {
   final VoidCallback onStart;
-  const CameraAlignmentScreen({super.key, required this.onStart});
+  final String sessionName;
+  final WebSocketChannel? pairingChannel;
+
+  const CameraAlignmentScreen({
+    super.key,
+    required this.onStart,
+    required this.sessionName,
+    this.pairingChannel,
+  });
+
+  @override
+  State<CameraAlignmentScreen> createState() => _CameraAlignmentScreenState();
+}
+
+class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
+  Rect? _dragRect;
+  late final MobileScannerController _cameraController;
+  bool _exposureLocked = false;
+  bool _focusLocked = false;
+  bool _whiteBalanceLocked = false;
+  bool _startingSession = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _cameraController = MobileScannerController();
+  }
+
+  @override
+  void dispose() {
+    _cameraController.dispose();
+    super.dispose();
+  }
+
+  void _resetRoi(RoiState state) {
+    state.reset();
+    setState(() {
+      _dragRect = state.normalizedRect;
+    });
+  }
+
+  void _updateRect(RoiState state, Rect rect) {
+    state.updateRect(rect);
+    setState(() {
+      _dragRect = state.normalizedRect;
+    });
+  }
+
+  void _toggleLock({
+    bool? exposure,
+    bool? focus,
+    bool? whiteBalance,
+  }) {
+    setState(() {
+      if (exposure != null) _exposureLocked = exposure;
+      if (focus != null) _focusLocked = focus;
+      if (whiteBalance != null) _whiteBalanceLocked = whiteBalance;
+    });
+
+    if (widget.pairingChannel != null) {
+      try {
+        widget.pairingChannel!.sink.add(jsonEncode({
+          'type': 'lock_update',
+          'timestamp': DateTime.now().toIso8601String(),
+          'session': widget.sessionName,
+          'locks': {
+            'exposure': _exposureLocked,
+            'focus': _focusLocked,
+            'whiteBalance': _whiteBalanceLocked,
+          },
+        }));
+      } catch (e) {
+        debugPrint('Failed to send lock update: $e');
+      }
+    }
+  }
+
+  void _handleResize(DragUpdateDetails details, Size size, RoiState state,
+      {bool left = false, bool right = false, bool top = false, bool bottom = false}) {
+    final current = _dragRect ?? state.normalizedRect;
+    double l = current.left;
+    double r = current.right;
+    double t = current.top;
+    double b = current.bottom;
+
+    final dx = details.delta.dx / size.width;
+    final dy = details.delta.dy / size.height;
+
+    if (left) l += dx;
+    if (right) r += dx;
+    if (top) t += dy;
+    if (bottom) b += dy;
+
+    _updateRect(state, Rect.fromLTRB(l, t, r, b));
+  }
+
+  void _handleMove(DragUpdateDetails details, Size size, RoiState state) {
+    final current = _dragRect ?? state.normalizedRect;
+    final dx = details.delta.dx / size.width;
+    final dy = details.delta.dy / size.height;
+    _updateRect(
+      state,
+      Rect.fromLTWH(
+        current.left + dx,
+        current.top + dy,
+        current.width,
+        current.height,
+      ),
+    );
+  }
+
+  Future<void> _startSession(RoiState state) async {
+    if (_startingSession) return;
+    setState(() {
+      _startingSession = true;
+    });
+
+    final previewSize = state.previewSize ?? const Size(1080, 1920);
+    final roiPixels = state.pixelRectFor(previewSize);
+
+    if (widget.pairingChannel != null) {
+      try {
+        widget.pairingChannel!.sink.add(jsonEncode({
+          'type': 'session_start',
+          'session': widget.sessionName,
+          'timestamp': DateTime.now().toIso8601String(),
+          'roi': {
+            'normalized': {
+              'left': state.normalizedRect.left,
+              'top': state.normalizedRect.top,
+              'width': state.normalizedRect.width,
+              'height': state.normalizedRect.height,
+            },
+            'pixels': {
+              'x': roiPixels.left,
+              'y': roiPixels.top,
+              'width': roiPixels.width,
+              'height': roiPixels.height,
+            },
+            'previewSize': {
+              'width': previewSize.width,
+              'height': previewSize.height,
+            },
+          },
+          'locks': {
+            'exposure': _exposureLocked,
+            'focus': _focusLocked,
+            'whiteBalance': _whiteBalanceLocked,
+          },
+        }));
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Session started and sent to desktop')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to notify desktop: $e')),
+          );
+        }
+      }
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Starting locally (no desktop pairing)')),
+        );
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _startingSession = false;
+      });
+      widget.onStart();
+    }
+  }
+
+  Widget _handleAt(Offset position, Size size, RoiState state,
+      {bool left = false, bool right = false, bool top = false, bool bottom = false}) {
+    const double handleSize = 18;
+    return Positioned(
+      left: position.dx - handleSize / 2,
+      top: position.dy - handleSize / 2,
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onPanUpdate: (details) =>
+            _handleResize(details, size, state, left: left, right: right, top: top, bottom: bottom),
+        child: Container(
+          width: handleSize,
+          height: handleSize,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border.all(color: Colors.blue.shade400, width: 2),
+            shape: BoxShape.circle,
+          ),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final roiState = RoiProvider.of(context);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Camera Alignment / ROI'),
@@ -1845,56 +2344,130 @@ class CameraAlignmentScreen extends StatelessWidget {
         child: Column(
           children: [
             Expanded(
-              child: Container(
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  color: Colors.black,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Stack(
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 180,
-                        height: 240,
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.white70, width: 2),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final size = Size(constraints.maxWidth, constraints.maxHeight);
+                    roiState.updatePreviewSize(size);
+                    final normalized = _dragRect ?? roiState.normalizedRect;
+                    final roiPixels = Rect.fromLTWH(
+                      normalized.left * size.width,
+                      normalized.top * size.height,
+                      normalized.width * size.width,
+                      normalized.height * size.height,
+                    );
+
+                    return Stack(
+                      children: [
+                        MobileScanner(
+                          controller: _cameraController,
+                          fit: BoxFit.cover,
+                          onDetect: (_) {},
                         ),
-                      ),
-                    ),
-                    Center(
-                      child: Container(
-                        width: 12,
-                        height: 12,
-                        decoration: const BoxDecoration(
-                          color: Colors.white,
-                          shape: BoxShape.circle,
+                        Positioned.fill(
+                          child: Container(
+                            color: Colors.black.withOpacity(0.15),
+                          ),
                         ),
-                      ),
-                    ),
-                    Positioned(
-                      bottom: 12,
-                      left: 12,
-                      child: Row(
-                        children: const [
-                          Icon(Icons.brightness_6, color: Colors.white70),
-                          SizedBox(width: 6),
-                          Text('Brightness OK', style: TextStyle(color: Colors.white70)),
-                        ],
-                      ),
-                    ),
-                    Positioned(
-                      bottom: 12,
-                      right: 12,
-                      child: Row(
-                        children: const [
-                          Icon(Icons.center_focus_strong, color: Colors.white70),
-                          SizedBox(width: 6),
-                          Text('Sharpness OK', style: TextStyle(color: Colors.white70)),
-                        ],
-                      ),
-                    ),
-                  ],
+                        Positioned(
+                          left: roiPixels.left,
+                          top: roiPixels.top,
+                          width: roiPixels.width,
+                          height: roiPixels.height,
+                          child: GestureDetector(
+                            onPanUpdate: (details) => _handleMove(details, size, roiState),
+                            child: Container(
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.blueAccent, width: 3),
+                                color: Colors.white.withOpacity(0.08),
+                              ),
+                            ),
+                          ),
+                        ),
+                        _handleAt(roiPixels.topLeft, size, roiState,
+                            left: true, top: true),
+                        _handleAt(roiPixels.topRight, size, roiState,
+                            right: true, top: true),
+                        _handleAt(roiPixels.bottomLeft, size, roiState,
+                            left: true, bottom: true),
+                        _handleAt(roiPixels.bottomRight, size, roiState,
+                            right: true, bottom: true),
+                        Positioned(
+                          top: 12,
+                          left: 12,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.6),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'ROI ${roiPixels.width.toStringAsFixed(0)} x ${roiPixels.height.toStringAsFixed(0)} px',
+                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                                ),
+                                Text(
+                                  'x:${roiPixels.left.toStringAsFixed(0)}  y:${roiPixels.top.toStringAsFixed(0)}',
+                                  style: const TextStyle(color: Colors.white70),
+                                ),
+                                Text(
+                                  'Session: ${widget.sessionName}',
+                                  style: const TextStyle(color: Colors.white70),
+                                ),
+                                Text(
+                                  widget.pairingChannel != null
+                                      ? 'Desktop link ready'
+                                      : 'Not paired to desktop',
+                                  style: TextStyle(
+                                    color: widget.pairingChannel != null
+                                        ? Colors.lightGreenAccent
+                                        : Colors.orangeAccent,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          bottom: 12,
+                          left: 12,
+                          child: Row(
+                            children: [
+                              const Icon(Icons.brightness_6, color: Colors.white70),
+                              const SizedBox(width: 6),
+                              Text(
+                                _exposureLocked ? 'Exposure locked' : 'Brightness OK',
+                                style: const TextStyle(color: Colors.white70),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Positioned(
+                          bottom: 12,
+                          right: 12,
+                          child: Row(
+                            children: [
+                              Icon(
+                                _focusLocked
+                                    ? Icons.center_focus_weak_outlined
+                                    : Icons.center_focus_strong,
+                                color: Colors.white70,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                _focusLocked ? 'Focus locked' : 'Sharpness OK',
+                                style: const TextStyle(color: Colors.white70),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
               ),
             ),
@@ -1905,18 +2478,47 @@ class CameraAlignmentScreen extends StatelessWidget {
               children: [
                 FilterChip(
                   label: const Text('Lock exposure'),
-                  selected: false,
-                  onSelected: (_) {},
+                  selected: _exposureLocked,
+                  onSelected: (value) {
+                    _toggleLock(exposure: value);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          value ? 'Exposure locked' : 'Exposure auto adjusts',
+                        ),
+                      ),
+                    );
+                  },
                 ),
                 FilterChip(
                   label: const Text('Lock focus'),
-                  selected: false,
-                  onSelected: (_) {},
+                  selected: _focusLocked,
+                  onSelected: (value) {
+                    _toggleLock(focus: value);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          value ? 'Focus locked' : 'Focus auto adjusts',
+                        ),
+                      ),
+                    );
+                  },
                 ),
                 FilterChip(
                   label: const Text('Lock white balance'),
-                  selected: false,
-                  onSelected: (_) {},
+                  selected: _whiteBalanceLocked,
+                  onSelected: (value) {
+                    _toggleLock(whiteBalance: value);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          value
+                              ? 'White balance locked'
+                              : 'White balance auto adjusts',
+                        ),
+                      ),
+                    );
+                  },
                 ),
               ],
             ),
@@ -1925,15 +2527,25 @@ class CameraAlignmentScreen extends StatelessWidget {
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: () {},
+                    onPressed: () => _resetRoi(roiState),
                     child: const Text('Reset ROI'),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: onStart,
-                    child: const Text('Start Session'),
+                    onPressed: _startingSession
+                        ? null
+                        : () async {
+                            await _startSession(roiState);
+                          },
+                    child: _startingSession
+                        ? const SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Start Session'),
                   ),
                 ),
               ],
@@ -1953,80 +2565,363 @@ class CaptureStatus {
   factory CaptureStatus.zero() => const CaptureStatus(captured: 0, pending: 0, uploaded: 0);
 }
 
-class ActiveCaptureScreen extends StatelessWidget {
+class ActiveCaptureScreen extends StatefulWidget {
   final String sessionName;
   final CaptureStatus status;
+  final WebSocketChannel? pairingChannel;
 
-  const ActiveCaptureScreen({super.key, required this.sessionName, required this.status});
+  const ActiveCaptureScreen({
+    super.key,
+    required this.sessionName,
+    required this.status,
+    this.pairingChannel,
+  });
+
+  @override
+  State<ActiveCaptureScreen> createState() => _ActiveCaptureScreenState();
+}
+
+class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
+  String? _lastSendSummary;
+  bool _temperatureLocked = false;
+  String? _temperatureValue;
+  bool _mutePrompts = false;
+  final List<Map<String, dynamic>> _queuedFrames = [];
+
+  @override
+  void dispose() {
+    widget.pairingChannel?.sink.close();
+    super.dispose();
+  }
+
+  Future<void> _sendCapture(RoiState roiState) async {
+    final size = roiState.previewSize ?? const Size(1080, 1920);
+    final roiPixels = roiState.pixelRectFor(size);
+    final frameBytes = await _buildRoiPreview(size, roiPixels);
+    final payload = {
+      'type': 'frame',
+      'session': widget.sessionName,
+      'timestamp': DateTime.now().toIso8601String(),
+      'roi': {
+        'normalized': {
+          'left': roiState.normalizedRect.left,
+          'top': roiState.normalizedRect.top,
+          'width': roiState.normalizedRect.width,
+          'height': roiState.normalizedRect.height,
+        },
+        'pixels': {
+          'x': roiPixels.left,
+          'y': roiPixels.top,
+          'width': roiPixels.width,
+          'height': roiPixels.height,
+        },
+        'previewSize': {'width': size.width, 'height': size.height},
+      },
+      'frame': base64Encode(frameBytes),
+    };
+
+    final connected = widget.pairingChannel != null;
+
+    if (!_temperatureLocked) {
+      setState(() {
+        _queuedFrames.add(payload);
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Awaiting temperature lock before sending. Queued photo.')),
+        );
+      }
+      return;
+    }
+
+    if (!connected) {
+      setState(() {
+        _queuedFrames.add(payload);
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Desktop offline. Queued photo for later.')),
+        );
+      }
+      return;
+    }
+
+    try {
+      widget.pairingChannel?.sink.add(jsonEncode(payload));
+      setState(() {
+        _lastSendSummary =
+            'Sent ROI ${roiPixels.width.toStringAsFixed(0)}x${roiPixels.height.toStringAsFixed(0)} at (${roiPixels.left.toStringAsFixed(0)}, ${roiPixels.top.toStringAsFixed(0)})';
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Capture sent with ROI metadata')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to send capture: $e')),
+      );
+    }
+  }
+
+  void _flushQueue() {
+    if (widget.pairingChannel == null || !_temperatureLocked) return;
+    for (final payload in _queuedFrames) {
+      widget.pairingChannel?.sink.add(jsonEncode(payload));
+    }
+    setState(() {
+      _queuedFrames.clear();
+    });
+    if (mounted && _queuedFrames.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Queued frames sent to desktop.')),
+      );
+    }
+  }
+
+  Future<Uint8List> _buildRoiPreview(Size size, Rect roiPixels) async {
+    final recorder = PictureRecorder();
+    final canvas = Canvas(recorder);
+    final width = max(1, size.width.round());
+    final height = max(1, size.height.round());
+
+    final gradient = const LinearGradient(
+      colors: [Color(0xFF0EA5E9), Color(0xFF1D4ED8)],
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+    ).createShader(Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()));
+
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
+      Paint()..shader = gradient,
+    );
+    canvas.drawRect(
+      roiPixels,
+      Paint()..color = Colors.white.withOpacity(0.2),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(roiPixels, const Radius.circular(8)),
+      Paint()
+        ..color = Colors.white.withOpacity(0.4)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4,
+    );
+
+    final label = TextPainter(
+      text: TextSpan(
+        text:
+            '${roiPixels.width.toStringAsFixed(0)} x ${roiPixels.height.toStringAsFixed(0)} @ (${roiPixels.left.toStringAsFixed(0)}, ${roiPixels.top.toStringAsFixed(0)})',
+        style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: width - 24);
+    label.paint(canvas, Offset(12, 12));
+
+    final image = await recorder.endRecording().toImage(width, height);
+    final data = await image.toByteData(format: ImageByteFormat.png);
+    return data?.buffer.asUint8List() ?? Uint8List(0);
+  }
+
+  Future<void> _promptTemperature() async {
+    final entered = await Navigator.push<String?>(
+      context,
+      MaterialPageRoute(builder: (_) => TemperatureEntryScreen()),
+    );
+    if (entered == null || entered.trim().isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Temperature required before sending frames.')),
+        );
+      }
+      return;
+    }
+    setState(() {
+      _temperatureLocked = true;
+      _temperatureValue = entered.trim();
+    });
+    if (widget.pairingChannel != null) {
+      widget.pairingChannel?.sink.add(jsonEncode({
+        'type': 'temperature',
+        'value': entered.trim(),
+        'timestamp': DateTime.now().toIso8601String(),
+      }));
+    }
+    _flushQueue();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(sessionName),
-        actions: [
-          IconButton(
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => UploadQueueScreen(status: status, items: const []),
+    final roiState = RoiProvider.of(context);
+    final connected = widget.pairingChannel != null;
+    return WillPopScope(
+      onWillPop: () async {
+        final proceed = await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Session running'),
+                content:
+                    const Text('Stop the session before leaving to avoid losing queued captures.'),
+                actions: [
+                  TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Stay')),
+                  TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('End Anyway')),
+                ],
               ),
-            ),
-            icon: const Icon(Icons.cloud_upload_outlined),
-          )
-        ],
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: const [
-                Icon(Icons.circle, color: Colors.red, size: 12),
-                SizedBox(width: 6),
-                Text('Not connected'),
-                Spacer(),
-                Text('00:00:00'),
+            ) ??
+            false;
+        return proceed;
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(widget.sessionName),
+          actions: [
+            IconButton(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => UploadQueueScreen(status: widget.status, items: const []),
+                ),
+              ),
+              icon: const Icon(Icons.cloud_upload_outlined),
+            )
+          ],
+        ),
+        body: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+              children: [
+                Icon(Icons.circle, color: connected ? Colors.green : Colors.red, size: 12),
+                const SizedBox(width: 6),
+                Text(connected ? 'Connected to desktop' : 'Not connected'),
+                const Spacer(),
+                Row(
+                  children: [
+                    IconButton(
+                      onPressed: () => setState(() => _mutePrompts = !_mutePrompts),
+                      icon: Icon(_mutePrompts ? Icons.mic_off : Icons.mic),
+                    ),
+                    const Text('00:00:00'),
+                  ],
+                ),
               ],
             ),
             const SizedBox(height: 12),
             Expanded(
-              child: Container(
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  color: Colors.black,
-                  borderRadius: BorderRadius.circular(16),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final size = Size(constraints.maxWidth, constraints.maxHeight);
+                    roiState.updatePreviewSize(size);
+                    final roiPixels = roiState.pixelRectFor(size);
+                    return Stack(
+                      children: [
+                        Container(color: Colors.black),
+                        Positioned(
+                          left: roiPixels.left,
+                          top: roiPixels.top,
+                          width: roiPixels.width,
+                          height: roiPixels.height,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.blueAccent, width: 3),
+                              color: Colors.white.withOpacity(0.05),
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          top: 12,
+                          right: 12,
+                          child: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.6),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'ROI ${roiPixels.width.toStringAsFixed(0)}x${roiPixels.height.toStringAsFixed(0)}',
+                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                ),
+                                Text(
+                                  'x:${roiPixels.left.toStringAsFixed(0)} y:${roiPixels.top.toStringAsFixed(0)}',
+                                  style: const TextStyle(color: Colors.white70),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
-                child: const Center(
-                  child: Icon(Icons.play_circle_outline, color: Colors.white70, size: 48),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: _temperatureLocked ? const Color(0xFFF0FDF4) : const Color(0xFFFFF7ED),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: _temperatureLocked ? const Color(0xFF22C55E) : const Color(0xFFF97316),
                 ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _temperatureLocked ? Icons.thermostat : Icons.warning_amber_rounded,
+                    color: _temperatureLocked ? const Color(0xFF16A34A) : const Color(0xFFD97706),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _temperatureLocked
+                              ? 'Temperature locked at ${_temperatureValue ?? '--'} °C'
+                              : 'Lock temperature before captures sync to desktop.',
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        Text(
+                          _queuedFrames.isEmpty
+                              ? 'Frames go live as soon as you capture.'
+                              : '${_queuedFrames.length} capture(s) queued until temperature is locked and desktop is ready.',
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  ElevatedButton(
+                    onPressed: _promptTemperature,
+                    child: Text(_temperatureLocked ? 'Update Temp' : 'Enter Temp'),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 12),
             Wrap(
               spacing: 8,
-              runSpacing: 8,
-              children: [
-                ElevatedButton.icon(
-                  onPressed: () {},
+                runSpacing: 8,
+                children: [
+                  ElevatedButton.icon(
+                  onPressed: connected && _temperatureLocked ? () => _sendCapture(roiState) : null,
                   icon: const Icon(Icons.camera_alt_outlined),
                   label: const Text('Capture Now'),
                 ),
                 OutlinedButton.icon(
-                  onPressed: () {},
+                  onPressed: connected && _temperatureLocked ? () {} : null,
                   icon: const Icon(Icons.timer),
                   label: const Text('Start Timed Capture'),
                 ),
                 OutlinedButton.icon(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => TemperatureEntryScreen(),
-                      ),
-                    );
-                  },
+                  onPressed: _promptTemperature,
                   icon: const Icon(Icons.thermostat),
                   label: const Text('Enter Temperature'),
                 ),
@@ -2043,6 +2938,17 @@ class ActiveCaptureScreen extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 12),
+            if (_lastSendSummary != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Row(
+                  children: [
+                    const Icon(Icons.check_circle, color: Colors.green),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(_lastSendSummary!)),
+                  ],
+                ),
+              ),
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(12),
@@ -2054,16 +2960,16 @@ class ActiveCaptureScreen extends StatelessWidget {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  _UploadStat(label: 'Captured', value: status.captured),
-                  _UploadStat(label: 'Pending', value: status.pending),
-                  _UploadStat(label: 'Uploaded', value: status.uploaded),
+                  _UploadStat(label: 'Captured', value: widget.status.captured),
+                  _UploadStat(label: 'Pending', value: widget.status.pending),
+                  _UploadStat(label: 'Uploaded', value: widget.status.uploaded),
                   TextButton(
                     onPressed: () {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
                           builder: (_) => UploadQueueScreen(
-                            status: status,
+                            status: widget.status,
                             items: const [],
                           ),
                         ),
@@ -2090,7 +2996,7 @@ class ActiveCaptureScreen extends StatelessWidget {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => SessionSummaryScreen(status: status),
+                          builder: (_) => SessionSummaryScreen(status: widget.status),
                         ),
                       );
                     },
@@ -2098,7 +3004,7 @@ class ActiveCaptureScreen extends StatelessWidget {
                   ),
                 ),
               ],
-            )
+            ),
           ],
         ),
       ),
@@ -2125,11 +3031,17 @@ class _UploadStat extends StatelessWidget {
   }
 }
 
-class TemperatureEntryScreen extends StatelessWidget {
+class TemperatureEntryScreen extends StatefulWidget {
   TemperatureEntryScreen({super.key});
 
+  @override
+  State<TemperatureEntryScreen> createState() => _TemperatureEntryScreenState();
+}
+
+class _TemperatureEntryScreenState extends State<TemperatureEntryScreen> {
   final _tempController = TextEditingController();
   final _noteController = TextEditingController();
+  bool _muteVoice = false;
 
   @override
   Widget build(BuildContext context) {
@@ -2166,6 +3078,12 @@ class TemperatureEntryScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 12),
+            SwitchListTile(
+              value: _muteVoice,
+              onChanged: (value) => setState(() => _muteVoice = value),
+              title: const Text('Silence voice prompts while entering temperature'),
+              secondary: Icon(_muteVoice ? Icons.volume_off : Icons.volume_up_outlined),
+            ),
             Row(
               children: [
                 Expanded(
@@ -2177,7 +3095,7 @@ class TemperatureEntryScreen extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: () => Navigator.pop(context),
+                    onPressed: () => Navigator.pop(context, _tempController.text),
                     child: const Text('Save'),
                   ),
                 ),
@@ -2471,6 +3389,14 @@ class ProjectData {
       isActive: (json['active'] as bool?) ?? false,
     );
   }
+
+  ProjectData copyWith({String? name, int? sessions, bool? isActive}) {
+    return ProjectData(
+      name: name ?? this.name,
+      sessions: sessions ?? this.sessions,
+      isActive: isActive ?? this.isActive,
+    );
+  }
 }
 
 class SessionData {
@@ -2584,6 +3510,15 @@ class Stats {
       temps: (json['temps'] as num?)?.toInt() ?? 0,
     );
   }
+
+  Stats copyWith({int? projects, int? sessions, int? images, int? temps}) {
+    return Stats(
+      projects: projects ?? this.projects,
+      sessions: sessions ?? this.sessions,
+      images: images ?? this.images,
+      temps: temps ?? this.temps,
+    );
+  }
 }
 
 Color _hexToColor(String hex) {
@@ -2620,21 +3555,45 @@ Color _badgeColor(String badge) {
 }
 
 class PairingCard extends StatelessWidget {
-  const PairingCard({super.key});
+  final ProjectData? activeProject;
+
+  const PairingCard({super.key, required this.activeProject});
 
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<PairingServerState>(
       valueListenable: PairingHost.instance.state,
       builder: (context, state, _) {
+        if (activeProject == null) {
+          return _Card(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text(
+                  'Phone Connection',
+                  style: TextStyle(
+                    color: Color(0xFF6B7280),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                SizedBox(height: 8),
+                Text(
+                  'Select a project to unlock pairing and QR codes.',
+                  style: TextStyle(color: Color(0xFF6B7280)),
+                ),
+              ],
+            ),
+          );
+        }
+
         final connected = state.connected;
         return _Card(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'Phone Connection',
-                style: TextStyle(
+              Text(
+                'Phone Connection • ${activeProject!.name}',
+                style: const TextStyle(
                   color: Color(0xFF6B7280),
                   fontWeight: FontWeight.w600,
                 ),
@@ -2688,13 +3647,86 @@ class PairingCard extends StatelessWidget {
                 'Status: ${state.status}',
                 style: const TextStyle(fontWeight: FontWeight.w700),
               ),
-              if (state.lastMessage != null) ...[
+              if (state.lastTemperature != null || !state.temperatureLocked) ...[
                 const SizedBox(height: 6),
-                Text(
-                  'Last message: ${state.lastMessage}',
-                  style: const TextStyle(color: Color(0xFF6B7280)),
+                Row(
+                  children: [
+                    Icon(
+                      state.temperatureLocked ? Icons.thermostat : Icons.hourglass_bottom,
+                      color: state.temperatureLocked ? Colors.orange : Colors.red,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        state.temperatureLocked
+                            ? 'Temperature locked at ${state.lastTemperature ?? '--'}'
+                            : 'Awaiting temperature entry from phone before accepting images',
+                        style: const TextStyle(color: Color(0xFF4B5563)),
+                      ),
+                    ),
+                  ],
                 ),
               ],
+              if (state.lastMessage != null) ...[
+                const SizedBox(height: 6),
+                const Text(
+                  'Last message:',
+                  style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF4B5563)),
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  constraints: const BoxConstraints(maxHeight: 120),
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF3F4F6),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                  ),
+                  child: Scrollbar(
+                    thumbVisibility: true,
+                    child: SingleChildScrollView(
+                      child: Text(
+                        state.lastMessage ?? '',
+                        style: const TextStyle(color: Color(0xFF6B7280)),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+              if (state.lastFrameBytes != null) ...[
+                const SizedBox(height: 8),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: AspectRatio(
+                    aspectRatio: 4 / 3,
+                    child: Image.memory(
+                      state.lastFrameBytes!,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                    ),
+                  ),
+                ),
+              ],
+              if (state.lastFrameSummary != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Last ROI frame: ${state.lastFrameSummary}',
+                  style: const TextStyle(color: Color(0xFF0F172A), fontWeight: FontWeight.w600),
+                ),
+              ],
+              if (state.lastFrameBytes != null && state.temperatureLocked) ...[
+                const SizedBox(height: 12),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Evaluation pipeline will run here (OpenCV stub).')),
+                    );
+                  },
+                  icon: const Icon(Icons.play_arrow),
+                  label: const Text('Start Evaluating'),
+                  style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(44)),
+                ),
+              ]
             ],
           ),
         );
@@ -2710,6 +3742,10 @@ class PairingServerState {
   final String? qrData;
   final String displayHost;
   final String? lastMessage;
+  final String? lastFrameSummary;
+  final Uint8List? lastFrameBytes;
+  final String? lastTemperature;
+  final bool temperatureLocked;
 
   const PairingServerState({
     required this.running,
@@ -2718,6 +3754,10 @@ class PairingServerState {
     required this.qrData,
     required this.displayHost,
     required this.lastMessage,
+    required this.lastFrameSummary,
+    required this.lastFrameBytes,
+    required this.lastTemperature,
+    required this.temperatureLocked,
   });
 
   PairingServerState copyWith({
@@ -2727,6 +3767,10 @@ class PairingServerState {
     String? qrData,
     String? displayHost,
     String? lastMessage,
+    String? lastFrameSummary,
+    Uint8List? lastFrameBytes,
+    String? lastTemperature,
+    bool? temperatureLocked,
   }) {
     return PairingServerState(
       running: running ?? this.running,
@@ -2735,6 +3779,10 @@ class PairingServerState {
       qrData: qrData ?? this.qrData,
       displayHost: displayHost ?? this.displayHost,
       lastMessage: lastMessage ?? this.lastMessage,
+      lastFrameSummary: lastFrameSummary ?? this.lastFrameSummary,
+      lastFrameBytes: lastFrameBytes ?? this.lastFrameBytes,
+      lastTemperature: lastTemperature ?? this.lastTemperature,
+      temperatureLocked: temperatureLocked ?? this.temperatureLocked,
     );
   }
 }
@@ -2751,6 +3799,10 @@ class PairingHost {
     qrData: null,
     displayHost: '',
     lastMessage: null,
+    lastFrameSummary: null,
+    lastFrameBytes: null,
+    lastTemperature: null,
+    temperatureLocked: false,
   ));
 
   HttpServer? _server;
@@ -2759,7 +3811,8 @@ class PairingHost {
   String? _host;
   int _port = 0;
 
-  Future<void> ensureStarted() async {
+  Future<void> startForProject(String projectName) async {
+    await stop();
     if (state.value.running) return;
     if (kIsWeb) return;
     try {
@@ -2777,18 +3830,47 @@ class PairingHost {
       _server = await HttpServer.bind(InternetAddress.anyIPv4, 8787);
       _port = _server!.port;
       _server!.listen(_handleRequest);
-      final qr = 'ws://$_host:$_port/pair?token=$_token&mode=live';
+      final qr =
+          'ws://$_host:$_port/pair?token=$_token&mode=live&project=${Uri.encodeComponent(projectName)}';
       state.value = state.value.copyWith(
         running: true,
-        status: 'Awaiting scan',
+        status: 'Awaiting scan for $projectName',
         qrData: qr,
         displayHost: 'ws://$_host:$_port',
+        temperatureLocked: false,
+        lastTemperature: null,
+        lastFrameBytes: null,
+        lastFrameSummary: null,
+        lastMessage: null,
       );
     } catch (e) {
       state.value = state.value.copyWith(
         status: 'Failed to start pairing: $e',
       );
     }
+  }
+
+  Future<void> stop() async {
+    try {
+      await _client?.close();
+    } catch (_) {}
+    try {
+      await _server?.close(force: true);
+    } catch (_) {}
+    _client = null;
+    _server = null;
+    state.value = const PairingServerState(
+      running: false,
+      connected: false,
+      status: 'Not started',
+      qrData: null,
+      displayHost: '',
+      lastMessage: null,
+      lastFrameSummary: null,
+      lastFrameBytes: null,
+      lastTemperature: null,
+      temperatureLocked: false,
+    );
   }
 
   Future<void> _handleRequest(HttpRequest request) async {
@@ -2810,10 +3892,54 @@ class PairingHost {
         status: 'Paired with ${request.connectionInfo?.remoteAddress.address ?? 'device'}',
       );
       socket.listen((data) {
-        state.value = state.value.copyWith(lastMessage: data?.toString());
+        final raw = data?.toString();
+        try {
+          final payload = jsonDecode(raw ?? '');
+          if (payload is Map && payload['type'] == 'frame') {
+            final roi = payload['roi'] as Map?;
+            final pixels = roi?['pixels'] as Map?;
+            Uint8List? frameBytes;
+            final frameStr = payload['frame'];
+            if (frameStr is String) {
+              try {
+                frameBytes = base64Decode(frameStr);
+              } catch (_) {}
+            }
+            final summary = pixels != null
+                ? 'ROI ${_fmtNum(pixels['width'])}x${_fmtNum(pixels['height'])} at (${_fmtNum(pixels['x'])}, ${_fmtNum(pixels['y'])})'
+                : 'ROI frame received';
+            state.value = state.value.copyWith(
+              lastMessage: raw,
+              lastFrameSummary: summary,
+              lastFrameBytes: frameBytes ?? state.value.lastFrameBytes,
+            );
+            if (frameBytes != null) {
+              _forwardForAnalysis(frameBytes);
+            }
+            return;
+          }
+          if (payload is Map && payload['type'] == 'temperature') {
+            final value = payload['value']?.toString();
+            state.value = state.value.copyWith(
+              lastMessage: raw,
+              lastTemperature: value,
+              temperatureLocked: true,
+              status: 'Temperature locked at ${value ?? '--'}',
+            );
+            return;
+          }
+          if (payload is Map && payload['type'] == 'session_start') {
+            state.value = state.value.copyWith(
+              lastMessage: raw,
+              status: 'Session ${payload['session'] ?? ''} ready',
+            );
+            return;
+          }
+        } catch (_) {}
+        state.value = state.value.copyWith(lastMessage: raw);
       }, onDone: () {
-        state.value =
-            state.value.copyWith(connected: false, status: 'Disconnected');
+        state.value = state.value
+            .copyWith(connected: false, status: 'Disconnected', lastFrameSummary: null);
       });
       socket.add(jsonEncode({
         'type': 'ack',
@@ -2827,9 +3953,22 @@ class PairingHost {
     }
   }
 
+  void _forwardForAnalysis(Uint8List bytes) {
+    // Placeholder for downstream analysis module integration.
+    // Frames are made available through the state notifier and can be
+    // consumed by future processing pipelines.
+  }
+
   String _randomToken() {
     const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
     final rand = Random.secure();
     return List.generate(12, (_) => chars[rand.nextInt(chars.length)]).join();
+  }
+
+  String _fmtNum(dynamic value) {
+    if (value is num) {
+      return value.toStringAsFixed(0);
+    }
+    return value?.toString() ?? '?';
   }
 }
