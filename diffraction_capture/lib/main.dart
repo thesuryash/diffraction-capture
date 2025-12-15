@@ -3059,7 +3059,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
       ),
     );
   }
-
+  }
 class _UploadStat extends StatelessWidget {
   final String label;
   final int value;
