@@ -327,79 +327,6 @@ class _DesktopDashboardState extends State<DesktopDashboard> {
     _mainScroll.animateTo(0, duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
   }
 
-  void _openSettings(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Settings'),
-        content: const Text('Settings panel coming soon. Pairing and projects are active.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
-        ],
-      ),
-    );
-  }
-
-  void _importData(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Import Data'),
-        content: const Text(
-            'Drag a session archive into this window to import. For now this will simulate a successful import.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              setState(() {
-                final extra = SessionData(
-                  title: 'Imported Session ${_sessions.length + 1}',
-                  date: DateTime.now().toIso8601String().split('T').first,
-                  images: 3,
-                  temps: 1,
-                  status: 'Imported',
-                  statusColor: const Color(0xFF22C55E),
-                  icon: Icons.file_upload_outlined,
-                  iconColor: const Color(0xFF8B5CF6),
-                );
-                _sessions = [extra, ..._sessions];
-                _stats = _stats?.copyWith(
-                  sessions: (_stats?.sessions ?? 0) + 1,
-                  images: (_stats?.images ?? 0) + extra.images,
-                );
-              });
-              _showSnack(context, 'Import completed and added to recent sessions');
-            },
-            child: const Text('Simulate Import'),
-          )
-        ],
-      ),
-    );
-  }
-
-  void _connectPhone(BuildContext context) {
-    PairingHost.instance.ensureStarted();
-    _showSnack(context, 'Pairing service ready – scan the QR from within a project.');
-  }
-
-  void _openSession(SessionData session) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(session.title),
-        content: Text('Captured on ${session.date}\n${session.images} images • ${session.temps} temps'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
-        ],
-      ),
-    );
-  }
-
-  void _viewAllSessions() {
-    _mainScroll.animateTo(0, duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -2864,23 +2791,23 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
-              children: [
-                Icon(Icons.circle, color: connected ? Colors.green : Colors.red, size: 12),
-                const SizedBox(width: 6),
-                Text(connected ? 'Connected to desktop' : 'Not connected'),
-                const Spacer(),
-                Row(
-                  children: [
-                    IconButton(
-                      onPressed: () => setState(() => _mutePrompts = !_mutePrompts),
-                      icon: Icon(_mutePrompts ? Icons.mic_off : Icons.mic),
-                    ),
-                    const Text('00:00:00'),
-                  ],
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
+                children: [
+                  Icon(Icons.circle, color: connected ? Colors.green : Colors.red, size: 12),
+                  const SizedBox(width: 6),
+                  Text(connected ? 'Connected to desktop' : 'Not connected'),
+                  const Spacer(),
+                  Row(
+                    children: [
+                      IconButton(
+                        onPressed: () => setState(() => _mutePrompts = !_mutePrompts),
+                        icon: Icon(_mutePrompts ? Icons.mic_off : Icons.mic),
+                      ),
+                      const Text('00:00:00'),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
             Expanded(
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(16),
