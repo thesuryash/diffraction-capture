@@ -2600,6 +2600,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
   String? _temperatureValue;
   bool _mutePrompts = false;
   bool _isSending = false;
+  bool _timedWindowBusy = false;
   final List<Map<String, dynamic>> _queuedFrames = [];
   final Duration _timedInterval = const Duration(seconds: 8);
   final ValueNotifier<List<_CapturedPhoto>> _capturedPhotos =
@@ -2636,6 +2637,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
 
   Future<void> _sendCapture(RoiState roiState) async {
     if (_isSending) return;
+    if (!mounted) return;
     setState(() => _isSending = true);
     final size = roiState.previewSize ?? const Size(1080, 1920);
     final roiPixels = roiState.pixelRectFor(size);
@@ -2795,20 +2797,29 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
 
   void _openTimedCaptureWindow(RoiState roiState) {
     if (_monitorOpen) return;
+    if (!mounted) return;
+
+    final nav = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
     _monitorOpen = true;
     showDialog(
-      context: context,
+      context: nav.context,
       builder: (_) => TimedCaptureWindow(
         photos: _capturedPhotos,
         interval: _timedInterval,
         status: _monitorStatus,
         onClose: () {
           _monitorOpen = false;
-          Navigator.of(context).pop();
+          nav.pop();
         },
         onCapture: () => _sendCapture(roiState),
       ),
-    ).then((_) => _monitorOpen = false);
+    ).then((_) {
+      _monitorOpen = false;
+      if (mounted) {
+        messenger.clearSnackBars();
+      }
+    });
   }
 
   Future<void> _sendCaptureToDesktop(Map<String, dynamic> payload, {Rect? roiPixels}) async {
@@ -3022,7 +3033,18 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                   ),
                   OutlinedButton.icon(
                     onPressed: connected && _temperatureLocked
-                        ? () => _openTimedCaptureWindow(roiState)
+                        ? () async {
+                            if (_timedWindowBusy) return;
+                            _timedWindowBusy = true;
+                            try {
+                              if (!mounted) return;
+                              _openTimedCaptureWindow(roiState);
+                            } finally {
+                              if (mounted) {
+                                _timedWindowBusy = false;
+                              }
+                            }
+                          }
                         : null,
                     icon: const Icon(Icons.timer),
                     label: const Text('Start Timed Capture'),
@@ -3259,6 +3281,7 @@ class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
   }
 
   Future<void> _tick() async {
+    if (!mounted) return;
     if (!_running) return;
     if (_secondsRemaining <= 1) {
       await _triggerCapture();
@@ -3270,7 +3293,7 @@ class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
   }
 
   Future<void> _triggerCapture() async {
-    if (_captureInFlight || !mounted) return;
+    if (!mounted || _captureInFlight) return;
     setState(() {
       _captureInFlight = true;
       _secondsRemaining = widget.interval.inSeconds;
