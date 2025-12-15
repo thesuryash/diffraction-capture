@@ -7,6 +7,7 @@ import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -592,51 +593,65 @@ class _Sidebar extends StatelessWidget {
     required this.pairingCard,
   });
 
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _Card(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Padding(
-                padding: EdgeInsets.only(bottom: 8.0),
-                child: Text(
-                  'Projects',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 15,
-                  ),
+    @override
+    Widget build(BuildContext context) {
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          return Scrollbar(
+            thumbVisibility: true,
+            child: SingleChildScrollView(
+              padding: EdgeInsets.zero,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _Card(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Padding(
+                            padding: EdgeInsets.only(bottom: 8.0),
+                            child: Text(
+                              'Projects',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 15,
+                              ),
+                            ),
+                          ),
+                          ...projects.map((project) {
+                            final isActive = project.isActive;
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(12),
+                                onTap: () => onProjectSelected(project),
+                                child: _SelectableTile(
+                                  title: project.name,
+                                  subtitle: '${project.sessions} sessions',
+                                  icon: isActive
+                                      ? Icons.folder_special
+                                      : Icons.folder_outlined,
+                                  isSelected: isActive,
+                                ),
+                              ),
+                            );
+                          }),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    pairingCard,
+                  ],
                 ),
               ),
-              ...projects.map((project) {
-                final isActive = project.isActive;
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(12),
-                    onTap: () => onProjectSelected(project),
-                    child: _SelectableTile(
-                      title: project.name,
-                      subtitle: '${project.sessions} sessions',
-                      icon:
-                          isActive ? Icons.folder_special : Icons.folder_outlined,
-                      isSelected: isActive,
-                    ),
-                  ),
-                );
-              }),
-            ],
-          ),
-        ),
-        const SizedBox(height: 10),
-        pairingCard,
-      ],
-    );
+            ),
+          );
+        },
+      );
+    }
   }
-}
 
 class _Card extends StatelessWidget {
   final Widget child;
@@ -2595,6 +2610,8 @@ class ActiveCaptureScreen extends StatefulWidget {
 }
 
 class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
+  final GlobalKey _roiPreviewKey = GlobalKey();
+  final MobileScannerController _sessionCameraController = MobileScannerController();
   String? _lastSendSummary;
   bool _temperatureLocked = false;
   String? _temperatureValue;
@@ -2608,18 +2625,21 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
   late final ValueNotifier<_MonitorStatus> _monitorStatus;
   bool _monitorOpen = false;
   Size? _lastPreviewSize;
+  late final bool _livePreviewSupported;
 
   @override
   void dispose() {
     widget.pairingChannel?.sink.close();
     _capturedPhotos.dispose();
     _monitorStatus.dispose();
+    _sessionCameraController.dispose();
     super.dispose();
   }
 
   @override
   void initState() {
     super.initState();
+    _livePreviewSupported = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
     _monitorStatus = ValueNotifier<_MonitorStatus>(
       _MonitorStatus(
         connected: widget.pairingChannel != null,
@@ -2711,6 +2731,38 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
   }
 
   Future<Uint8List> _buildRoiPreview(Size size, Rect roiPixels) async {
+    final boundary = _roiPreviewKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+
+    if (boundary != null) {
+      try {
+        final pixelRatio = MediaQuery.of(context).devicePixelRatio;
+        final fullImage = await boundary.toImage(pixelRatio: pixelRatio);
+        final roiRect = Rect.fromLTWH(
+          roiPixels.left * pixelRatio,
+          roiPixels.top * pixelRatio,
+          roiPixels.width * pixelRatio,
+          roiPixels.height * pixelRatio,
+        );
+
+        final recorder = PictureRecorder();
+        final canvas = Canvas(recorder);
+        canvas.drawImageRect(
+          fullImage,
+          roiRect,
+          Rect.fromLTWH(0, 0, roiRect.width, roiRect.height),
+          Paint(),
+        );
+
+        final cropped = await recorder
+            .endRecording()
+            .toImage(max(1, roiRect.width.round()), max(1, roiRect.height.round()));
+        final bytes = await cropped.toByteData(format: ImageByteFormat.png);
+        if (bytes != null) {
+          return bytes.buffer.asUint8List();
+        }
+      } catch (_) {}
+    }
+
     final recorder = PictureRecorder();
     final canvas = Canvas(recorder);
     final width = max(1, size.width.round());
@@ -2738,14 +2790,14 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
         ..strokeWidth = 4,
     );
 
-        final label = TextPainter(
-          text: TextSpan(
-            text: '${roiPixels.width.toStringAsFixed(0)} x ${roiPixels.height.toStringAsFixed(0)} @ (${roiPixels.left.toStringAsFixed(0)}, ${roiPixels.top.toStringAsFixed(0)})',
-            style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-          ),
-          textDirection: TextDirection.ltr,
-        )..layout(maxWidth: width - 24);
-      label.paint(canvas, Offset(12, 12));
+    final label = TextPainter(
+      text: TextSpan(
+        text: '${roiPixels.width.toStringAsFixed(0)} x ${roiPixels.height.toStringAsFixed(0)} @ (${roiPixels.left.toStringAsFixed(0)}, ${roiPixels.top.toStringAsFixed(0)})',
+        style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: width - 24);
+    label.paint(canvas, Offset(12, 12));
 
     final image = await recorder.endRecording().toImage(width, height);
     final data = await image.toByteData(format: ImageByteFormat.png);
@@ -2799,7 +2851,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
     if (_monitorOpen) return;
     if (!mounted) return;
 
-    final nav = Navigator.of(context);
+    final nav = Navigator.of(context, rootNavigator: true);
     final messenger = ScaffoldMessenger.of(context);
     _monitorOpen = true;
     showDialog(
@@ -2928,53 +2980,85 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                         roiState.updatePreviewSize(size);
                       });
                       final roiPixels = roiState.pixelRectFor(size);
-                      return Stack(
-                        children: [
-                          Container(color: Colors.black),
-                          Positioned(
-                            left: roiPixels.left,
-                            top: roiPixels.top,
-                            width: roiPixels.width,
-                            height: roiPixels.height,
-                            child: Container(
-                              decoration: BoxDecoration(
-                                border: Border.all(color: Colors.blueAccent, width: 3),
-                                color: Colors.white.withOpacity(0.05),
-                              ),
+              return RepaintBoundary(
+                key: _roiPreviewKey,
+                child: ValueListenableBuilder<PairingServerState>(
+                  valueListenable: PairingHost.instance.state,
+                  builder: (context, pairingState, _) {
+                    final background = _livePreviewSupported
+                        ? MobileScanner(
+                            controller: _sessionCameraController,
+                            fit: BoxFit.cover,
+                            onDetect: (_) {},
+                          )
+                        : pairingState.lastFrameBytes != null
+                            ? Image.memory(
+                                pairingState.lastFrameBytes!,
+                                fit: BoxFit.cover,
+                                gaplessPlayback: true,
+                                width: size.width,
+                                height: size.height,
+                              )
+                            : Container(
+                                decoration: const BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [Color(0xFF0EA5E9), Color(0xFF1D4ED8)],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  ),
+                                ),
+                              );
+
+                    return Stack(
+                      children: [
+                        Positioned.fill(child: background),
+                        Positioned(
+                          left: roiPixels.left,
+                          top: roiPixels.top,
+                          width: roiPixels.width,
+                          height: roiPixels.height,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.blueAccent, width: 3),
+                              color: Colors.white.withOpacity(0.05),
                             ),
                           ),
-                          Positioned(
-                            top: 12,
-                            right: 12,
-                            child: Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withOpacity(0.6),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'ROI ${roiPixels.width.toStringAsFixed(0)}x${roiPixels.height.toStringAsFixed(0)}',
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.bold,
-                                    ),
+                        ),
+                        Positioned(
+                          top: 12,
+                          right: 12,
+                          child: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.6),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'ROI ${roiPixels.width.toStringAsFixed(0)}x${roiPixels.height.toStringAsFixed(0)}',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
                                   ),
-                                  Text(
-                                    'x:${roiPixels.left.toStringAsFixed(0)} y:${roiPixels.top.toStringAsFixed(0)}',
-                                    style: const TextStyle(color: Colors.white70),
-                                  ),
-                                ],
-                              ),
+                                ),
+                                Text(
+                                  'x:${roiPixels.left.toStringAsFixed(0)} y:${roiPixels.top.toStringAsFixed(0)}',
+                                  style: const TextStyle(color: Colors.white70),
+                                ),
+                              ],
                             ),
                           ),
-                        ],
-                      );
-                    },
-                  ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
+              );
+            },
+          ),
+        ),
               ),
               const SizedBox(height: 12),
               Container(
@@ -4075,6 +4159,291 @@ class _PairingCardState extends State<PairingCard> {
     super.dispose();
   }
 
+  void _showFramePreview(BuildContext context, Uint8List bytes, {String? summary}) {
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return Dialog(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 620),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                ClipRRect(
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                  child: Container(
+                    color: const Color(0xFF0B1220),
+                    child: AspectRatio(
+                      aspectRatio: 4 / 3,
+                      child: InteractiveViewer(
+                        child: Image.memory(
+                          bytes,
+                          fit: BoxFit.contain,
+                          gaplessPlayback: true,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                if (summary != null) ...[
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    child: Text(
+                      summary,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF0F172A),
+                      ),
+                    ),
+                  ),
+                ],
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(),
+                      child: const Text('Close'),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _openProjectWindow(BuildContext context, PairingServerState state) {
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return Dialog(
+          insetPadding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1100, maxHeight: 780),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              widget.activeProject?.name ?? 'Project',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 18,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              state.connected
+                                  ? 'Live connection to handset ready'
+                                  : 'Waiting for handset connection',
+                              style: const TextStyle(color: Color(0xFF6B7280)),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        icon: const Icon(Icons.close),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Expanded(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(
+                          flex: 5,
+                          child: Scrollbar(
+                            thumbVisibility: true,
+                            child: SingleChildScrollView(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: [
+                                      _MonitorStatusChip(
+                                        icon: state.connected
+                                            ? Icons.desktop_windows_outlined
+                                            : Icons.desktop_access_disabled,
+                                        label: state.connected
+                                            ? 'Connected to desktop'
+                                            : 'Not connected',
+                                        color: state.connected
+                                            ? const Color(0xFF16A34A)
+                                            : const Color(0xFFF97316),
+                                      ),
+                                      _MonitorStatusChip(
+                                        icon: state.temperatureLocked
+                                            ? Icons.thermostat
+                                            : Icons.thermostat_auto_outlined,
+                                        label: state.temperatureLocked
+                                            ? 'Temperature locked'
+                                            : 'Awaiting temperature entry',
+                                        color: state.temperatureLocked
+                                            ? const Color(0xFF0EA5E9)
+                                            : const Color(0xFFE11D48),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 14),
+                                  Text(
+                                    'Status: ${state.status}',
+                                    style: const TextStyle(fontWeight: FontWeight.w700),
+                                  ),
+                                  if (state.lastTemperature != null || !state.temperatureLocked)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 8),
+                                      child: Row(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Icon(
+                                            state.temperatureLocked
+                                                ? Icons.thermostat
+                                                : Icons.hourglass_bottom,
+                                            color: state.temperatureLocked
+                                                ? Colors.orange
+                                                : Colors.red,
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Text(
+                                              state.temperatureLocked
+                                                  ? 'Temperature locked at ${state.lastTemperature ?? '--'}'
+                                                  : 'Awaiting temperature entry from phone before accepting images',
+                                              style: const TextStyle(color: Color(0xFF4B5563)),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  if (state.lastMessage != null)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 10),
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          const Text(
+                                            'Last message',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.w700,
+                                              color: Color(0xFF4B5563),
+                                            ),
+                                          ),
+                                          const SizedBox(height: 6),
+                                          Container(
+                                            padding: const EdgeInsets.all(10),
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFFF3F4F6),
+                                              borderRadius: BorderRadius.circular(12),
+                                              border: Border.all(color: const Color(0xFFE5E7EB)),
+                                            ),
+                                            child: Text(
+                                              state.lastMessage!,
+                                              style: const TextStyle(color: Color(0xFF6B7280)),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  if (state.lastFrameSummary != null)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 12),
+                                      child: Text(
+                                        'Last ROI frame: ${state.lastFrameSummary}',
+                                        style: const TextStyle(
+                                          color: Color(0xFF0F172A),
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          flex: 7,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Expanded(
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(16),
+                                  child: Container(
+                                    decoration: const BoxDecoration(
+                                      gradient: LinearGradient(
+                                        colors: [Color(0xFF0EA5E9), Color(0xFF1D4ED8)],
+                                        begin: Alignment.topLeft,
+                                        end: Alignment.bottomRight,
+                                      ),
+                                    ),
+                                    child: AspectRatio(
+                                      aspectRatio: 4 / 3,
+                                      child: state.lastFrameBytes != null
+                                          ? InteractiveViewer(
+                                              child: Image.memory(
+                                                state.lastFrameBytes!,
+                                                fit: BoxFit.contain,
+                                                gaplessPlayback: true,
+                                              ),
+                                            )
+                                          : const Center(
+                                              child: Text(
+                                                'No ROI frame received yet',
+                                                style: TextStyle(
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.w700,
+                                                ),
+                                              ),
+                                            ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Row(
+                                children: [
+                                  const Icon(Icons.open_in_full, color: Color(0xFF6B7280)),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      state.lastFrameBytes != null
+                                          ? 'Use pinch or mouse wheel to inspect the latest ROI image.'
+                                          : 'Waiting for the first ROI image from the handset.',
+                                      style: const TextStyle(color: Color(0xFF6B7280)),
+                                    ),
+                                  ),
+                                ],
+                              )
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<PairingServerState>(
@@ -4128,6 +4497,12 @@ class _PairingCardState extends State<PairingCard> {
                       ),
                     ),
                   ),
+                  if (widget.activeProject != null)
+                    TextButton.icon(
+                      onPressed: () => _openProjectWindow(context, state),
+                      icon: const Icon(Icons.open_in_new),
+                      label: const Text('Open project window'),
+                    ),
                 ],
               ),
               const SizedBox(height: 12),
@@ -4213,16 +4588,28 @@ class _PairingCardState extends State<PairingCard> {
               ],
               if (state.lastFrameBytes != null) ...[
                 const SizedBox(height: 8),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: AspectRatio(
-                    aspectRatio: 4 / 3,
-                    child: Image.memory(
-                      state.lastFrameBytes!,
-                      fit: BoxFit.cover,
-                      gaplessPlayback: true,
+                GestureDetector(
+                  onTap: () => _showFramePreview(context, state.lastFrameBytes!,
+                      summary: state.lastFrameSummary),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      color: const Color(0xFF0B1220),
+                      child: AspectRatio(
+                        aspectRatio: 4 / 3,
+                        child: Image.memory(
+                          state.lastFrameBytes!,
+                          fit: BoxFit.contain,
+                          gaplessPlayback: true,
+                        ),
+                      ),
                     ),
                   ),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Tap preview to view full size on this screen.',
+                  style: TextStyle(color: Color(0xFF6B7280), fontSize: 12),
                 ),
               ],
               if (state.lastFrameSummary != null) ...[
@@ -4366,7 +4753,8 @@ class PairingHost {
         status: 'Failed to start pairing: $e',
       );
     }
-  }
+
+    
 
   Future<void> stop() async {
     try {
