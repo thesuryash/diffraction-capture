@@ -1397,17 +1397,16 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
     } else {
       final sessionTitle =
           _nameController.text.isEmpty ? 'New Session' : _nameController.text;
+      final navigator = Navigator.of(context);
       _pairingTransferred = true;
       _pairingSub?.cancel();
-      Navigator.pushReplacement(
-        context,
+      navigator.pushReplacement(
         MaterialPageRoute(
           builder: (_) => CameraAlignmentScreen(
             sessionName: sessionTitle,
             pairingChannel: _pairingChannel,
             onStart: () {
-              Navigator.pushReplacement(
-                context,
+              navigator.pushReplacement(
                 MaterialPageRoute(
                   builder: (_) => ActiveCaptureScreen(
                     sessionName: sessionTitle,
