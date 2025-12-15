@@ -2586,15 +2586,22 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
   bool _temperatureLocked = false;
   String? _temperatureValue;
   bool _mutePrompts = false;
+  bool _isSending = false;
   final List<Map<String, dynamic>> _queuedFrames = [];
+  final Duration _timedInterval = const Duration(seconds: 8);
+  final ValueNotifier<List<_CapturedPhoto>> _capturedPhotos =
+      ValueNotifier<List<_CapturedPhoto>>([]);
 
   @override
   void dispose() {
     widget.pairingChannel?.sink.close();
+    _capturedPhotos.dispose();
     super.dispose();
   }
 
   Future<void> _sendCapture(RoiState roiState) async {
+    if (_isSending) return;
+    setState(() => _isSending = true);
     final size = roiState.previewSize ?? const Size(1080, 1920);
     final roiPixels = roiState.pixelRectFor(size);
     final frameBytes = await _buildRoiPreview(size, roiPixels);
@@ -2620,9 +2627,12 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
       'frame': base64Encode(frameBytes),
     };
 
+    _recordCapture(frameBytes, roiPixels);
+
     final connected = widget.pairingChannel != null;
 
     if (!_temperatureLocked) {
+      setState(() => _isSending = false);
       setState(() {
         _queuedFrames.add(payload);
       });
@@ -2635,6 +2645,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
     }
 
     if (!connected) {
+      setState(() => _isSending = false);
       setState(() {
         _queuedFrames.add(payload);
       });
@@ -2651,6 +2662,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
       setState(() {
         _lastSendSummary =
             'Sent ROI ${roiPixels.width.toStringAsFixed(0)}x${roiPixels.height.toStringAsFixed(0)} at (${roiPixels.left.toStringAsFixed(0)}, ${roiPixels.top.toStringAsFixed(0)})';
+        _isSending = false;
       });
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2658,6 +2670,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
       );
     } catch (e) {
       if (!mounted) return;
+      setState(() => _isSending = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to send capture: $e')),
       );
@@ -2748,10 +2761,39 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
     _flushQueue();
   }
 
-    @override
+  void _recordCapture(Uint8List bytes, Rect roi) {
+    final updated = [
+      _CapturedPhoto(
+        bytes: bytes,
+        createdAt: DateTime.now(),
+        summary:
+            '${roi.width.toStringAsFixed(0)}x${roi.height.toStringAsFixed(0)} @ (${roi.left.toStringAsFixed(0)}, ${roi.top.toStringAsFixed(0)})',
+      ),
+      ..._capturedPhotos.value,
+    ];
+    _capturedPhotos.value = updated.take(12).toList();
+  }
+
+  void _openTimedCaptureWindow(RoiState roiState) {
+    showDialog(
+      context: context,
+      builder: (_) => TimedCaptureWindow(
+        photos: _capturedPhotos,
+        interval: _timedInterval,
+        onClose: () => Navigator.of(context).pop(),
+        onCapture: () => _sendCapture(roiState),
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
     final roiState = RoiProvider.of(context);
     final connected = widget.pairingChannel != null;
+
+    if (connected && _temperatureLocked && _queuedFrames.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _flushQueue());
+    }
     return WillPopScope(
       onWillPop: () async {
         final proceed = await showDialog<bool>(
@@ -2914,12 +2956,15 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                 runSpacing: 8,
                 children: [
                   ElevatedButton.icon(
-                    onPressed: connected && _temperatureLocked ? () => _sendCapture(roiState) : null,
+                    onPressed:
+                        connected && _temperatureLocked ? () => _sendCapture(roiState) : null,
                     icon: const Icon(Icons.camera_alt_outlined),
                     label: const Text('Capture Now'),
                   ),
                   OutlinedButton.icon(
-                    onPressed: connected && _temperatureLocked ? () {} : null,
+                    onPressed: connected && _temperatureLocked
+                        ? () => _openTimedCaptureWindow(roiState)
+                        : null,
                     icon: const Icon(Icons.timer),
                     label: const Text('Start Timed Capture'),
                   ),
@@ -3014,6 +3059,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
       ),
     );
   }
+
 class _UploadStat extends StatelessWidget {
   final String label;
   final int value;
@@ -3029,6 +3075,260 @@ class _UploadStat extends StatelessWidget {
         ),
         Text(label),
       ],
+    );
+  }
+}
+
+class _CapturedPhoto {
+  final Uint8List bytes;
+  final DateTime createdAt;
+  final String summary;
+
+  const _CapturedPhoto({
+    required this.bytes,
+    required this.createdAt,
+    required this.summary,
+  });
+
+  String get timestampLabel {
+    final time = createdAt.toLocal();
+    final hour = time.hour.toString().padLeft(2, '0');
+    final minute = time.minute.toString().padLeft(2, '0');
+    final second = time.second.toString().padLeft(2, '0');
+    return '$hour:$minute:$second';
+  }
+}
+
+class TimedCaptureWindow extends StatefulWidget {
+  final ValueNotifier<List<_CapturedPhoto>> photos;
+  final Duration interval;
+  final Future<void> Function() onCapture;
+  final VoidCallback onClose;
+
+  const TimedCaptureWindow({
+    super.key,
+    required this.photos,
+    required this.interval,
+    required this.onCapture,
+    required this.onClose,
+  });
+
+  @override
+  State<TimedCaptureWindow> createState() => _TimedCaptureWindowState();
+}
+
+class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
+  Timer? _timer;
+  int _secondsRemaining = 0;
+  bool _captureInFlight = false;
+  bool _running = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _secondsRemaining = widget.interval.inSeconds;
+    _startTimer();
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  void _startTimer() {
+    _timer?.cancel();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+  }
+
+  Future<void> _tick() async {
+    if (!_running) return;
+    if (_secondsRemaining <= 1) {
+      await _triggerCapture();
+      return;
+    }
+    setState(() => _secondsRemaining -= 1);
+  }
+
+  Future<void> _triggerCapture() async {
+    if (_captureInFlight) return;
+    setState(() {
+      _captureInFlight = true;
+      _secondsRemaining = widget.interval.inSeconds;
+    });
+    try {
+      await widget.onCapture();
+    } finally {
+      if (mounted) {
+        setState(() => _captureInFlight = false);
+      }
+    }
+  }
+
+  void _toggleRunning() {
+    setState(() {
+      _running = !_running;
+    });
+    if (_running) {
+      _startTimer();
+      setState(() => _secondsRemaining = widget.interval.inSeconds);
+    } else {
+      _timer?.cancel();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      insetPadding: const EdgeInsets.all(24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 520),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Text(
+                    'Timed Capture Monitor',
+                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    onPressed: widget.onClose,
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F172A),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Next photo in',
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          '$_secondsRemaining',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 48,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'seconds',
+                          style: TextStyle(color: Colors.white70, fontSize: 16),
+                        )
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Interval: ${widget.interval.inSeconds}s • ${_running ? 'Running' : 'Paused'}',
+                      style: const TextStyle(color: Colors.white70),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        ElevatedButton.icon(
+                          onPressed: _captureInFlight ? null : _triggerCapture,
+                          icon: const Icon(Icons.camera),
+                          label: const Text('Capture now'),
+                        ),
+                        const SizedBox(width: 12),
+                        OutlinedButton.icon(
+                          onPressed: _toggleRunning,
+                          icon: Icon(_running ? Icons.pause : Icons.play_arrow),
+                          label: Text(_running ? 'Pause countdown' : 'Resume countdown'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Recent photos',
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: ValueListenableBuilder<List<_CapturedPhoto>>(
+                  valueListenable: widget.photos,
+                  builder: (context, items, _) {
+                    if (items.isEmpty) {
+                      return const Center(
+                        child: Text('No photos captured yet.'),
+                      );
+                    }
+                    return ListView.separated(
+                      itemCount: items.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                      itemBuilder: (context, index) {
+                        final photo = items[index];
+                        return Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF8FAFC),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFFE2E8F0)),
+                          ),
+                          child: Row(
+                            children: [
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(10),
+                                child: Image.memory(
+                                  photo.bytes,
+                                  width: 72,
+                                  height: 72,
+                                  fit: BoxFit.cover,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Captured at ${photo.timestampLabel}',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 15,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      photo.summary,
+                                      style: const TextStyle(color: Color(0xFF475569)),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
