@@ -7,6 +7,7 @@ import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -2609,6 +2610,8 @@ class ActiveCaptureScreen extends StatefulWidget {
 }
 
 class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
+  final GlobalKey _roiPreviewKey = GlobalKey();
+  final MobileScannerController _sessionCameraController = MobileScannerController();
   String? _lastSendSummary;
   bool _temperatureLocked = false;
   String? _temperatureValue;
@@ -2622,18 +2625,21 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
   late final ValueNotifier<_MonitorStatus> _monitorStatus;
   bool _monitorOpen = false;
   Size? _lastPreviewSize;
+  late final bool _livePreviewSupported;
 
   @override
   void dispose() {
     widget.pairingChannel?.sink.close();
     _capturedPhotos.dispose();
     _monitorStatus.dispose();
+    _sessionCameraController.dispose();
     super.dispose();
   }
 
   @override
   void initState() {
     super.initState();
+    _livePreviewSupported = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
     _monitorStatus = ValueNotifier<_MonitorStatus>(
       _MonitorStatus(
         connected: widget.pairingChannel != null,
@@ -2725,6 +2731,38 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
   }
 
   Future<Uint8List> _buildRoiPreview(Size size, Rect roiPixels) async {
+    final boundary = _roiPreviewKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+
+    if (boundary != null) {
+      try {
+        final pixelRatio = MediaQuery.of(context).devicePixelRatio;
+        final fullImage = await boundary.toImage(pixelRatio: pixelRatio);
+        final roiRect = Rect.fromLTWH(
+          roiPixels.left * pixelRatio,
+          roiPixels.top * pixelRatio,
+          roiPixels.width * pixelRatio,
+          roiPixels.height * pixelRatio,
+        );
+
+        final recorder = PictureRecorder();
+        final canvas = Canvas(recorder);
+        canvas.drawImageRect(
+          fullImage,
+          roiRect,
+          Rect.fromLTWH(0, 0, roiRect.width, roiRect.height),
+          Paint(),
+        );
+
+        final cropped = await recorder
+            .endRecording()
+            .toImage(max(1, roiRect.width.round()), max(1, roiRect.height.round()));
+        final bytes = await cropped.toByteData(format: ImageByteFormat.png);
+        if (bytes != null) {
+          return bytes.buffer.asUint8List();
+        }
+      } catch (_) {}
+    }
+
     final recorder = PictureRecorder();
     final canvas = Canvas(recorder);
     final width = max(1, size.width.round());
@@ -2752,14 +2790,14 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
         ..strokeWidth = 4,
     );
 
-        final label = TextPainter(
-          text: TextSpan(
-            text: '${roiPixels.width.toStringAsFixed(0)} x ${roiPixels.height.toStringAsFixed(0)} @ (${roiPixels.left.toStringAsFixed(0)}, ${roiPixels.top.toStringAsFixed(0)})',
-            style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-          ),
-          textDirection: TextDirection.ltr,
-        )..layout(maxWidth: width - 24);
-      label.paint(canvas, Offset(12, 12));
+    final label = TextPainter(
+      text: TextSpan(
+        text: '${roiPixels.width.toStringAsFixed(0)} x ${roiPixels.height.toStringAsFixed(0)} @ (${roiPixels.left.toStringAsFixed(0)}, ${roiPixels.top.toStringAsFixed(0)})',
+        style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: width - 24);
+    label.paint(canvas, Offset(12, 12));
 
     final image = await recorder.endRecording().toImage(width, height);
     final data = await image.toByteData(format: ImageByteFormat.png);
@@ -2942,76 +2980,85 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                         roiState.updatePreviewSize(size);
                       });
                       final roiPixels = roiState.pixelRectFor(size);
-                      return ValueListenableBuilder<PairingServerState>(
-                        valueListenable: PairingHost.instance.state,
-                        builder: (context, pairingState, _) {
-                          final background = pairingState.lastFrameBytes != null
-                              ? Image.memory(
-                                  pairingState.lastFrameBytes!,
-                                  fit: BoxFit.cover,
-                                  gaplessPlayback: true,
-                                  width: size.width,
-                                  height: size.height,
-                                )
-                              : Container(
-                                  decoration: const BoxDecoration(
-                                    gradient: LinearGradient(
-                                      colors: [Color(0xFF0EA5E9), Color(0xFF1D4ED8)],
-                                      begin: Alignment.topLeft,
-                                      end: Alignment.bottomRight,
-                                    ),
+              return RepaintBoundary(
+                key: _roiPreviewKey,
+                child: ValueListenableBuilder<PairingServerState>(
+                  valueListenable: PairingHost.instance.state,
+                  builder: (context, pairingState, _) {
+                    final background = _livePreviewSupported
+                        ? MobileScanner(
+                            controller: _sessionCameraController,
+                            fit: BoxFit.cover,
+                            onDetect: (_) {},
+                          )
+                        : pairingState.lastFrameBytes != null
+                            ? Image.memory(
+                                pairingState.lastFrameBytes!,
+                                fit: BoxFit.cover,
+                                gaplessPlayback: true,
+                                width: size.width,
+                                height: size.height,
+                              )
+                            : Container(
+                                decoration: const BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [Color(0xFF0EA5E9), Color(0xFF1D4ED8)],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
                                   ),
-                                );
+                                ),
+                              );
 
-                          return Stack(
-                            children: [
-                              Positioned.fill(child: background),
-                              Positioned(
-                                left: roiPixels.left,
-                                top: roiPixels.top,
-                                width: roiPixels.width,
-                                height: roiPixels.height,
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    border: Border.all(color: Colors.blueAccent, width: 3),
-                                    color: Colors.white.withOpacity(0.05),
+                    return Stack(
+                      children: [
+                        Positioned.fill(child: background),
+                        Positioned(
+                          left: roiPixels.left,
+                          top: roiPixels.top,
+                          width: roiPixels.width,
+                          height: roiPixels.height,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.blueAccent, width: 3),
+                              color: Colors.white.withOpacity(0.05),
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          top: 12,
+                          right: 12,
+                          child: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.6),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'ROI ${roiPixels.width.toStringAsFixed(0)}x${roiPixels.height.toStringAsFixed(0)}',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
                                   ),
                                 ),
-                              ),
-                              Positioned(
-                                top: 12,
-                                right: 12,
-                                child: Container(
-                                  padding: const EdgeInsets.all(8),
-                                  decoration: BoxDecoration(
-                                    color: Colors.black.withOpacity(0.6),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        'ROI ${roiPixels.width.toStringAsFixed(0)}x${roiPixels.height.toStringAsFixed(0)}',
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                      Text(
-                                        'x:${roiPixels.left.toStringAsFixed(0)} y:${roiPixels.top.toStringAsFixed(0)}',
-                                        style: const TextStyle(color: Colors.white70),
-                                      ),
-                                    ],
-                                  ),
+                                Text(
+                                  'x:${roiPixels.left.toStringAsFixed(0)} y:${roiPixels.top.toStringAsFixed(0)}',
+                                  style: const TextStyle(color: Colors.white70),
                                 ),
-                              ),
-                            ],
-                          );
-                        },
-                      );
-                    },
-                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
+              );
+            },
+          ),
+        ),
               ),
               const SizedBox(height: 12),
               Container(
