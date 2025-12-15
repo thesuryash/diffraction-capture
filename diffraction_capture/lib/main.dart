@@ -3531,6 +3531,13 @@ class PairingCard extends StatelessWidget {
                   style: const TextStyle(color: Color(0xFF0F172A), fontWeight: FontWeight.w600),
                 ),
               ],
+              if (state.lastFrameSummary != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Last ROI frame: ${state.lastFrameSummary}',
+                  style: const TextStyle(color: Color(0xFF0F172A), fontWeight: FontWeight.w600),
+                ),
+              ],
             ],
           ),
         );
