@@ -175,9 +175,156 @@ class _DesktopDashboardState extends State<DesktopDashboard> {
             (p) => p.isActive,
             orElse: () => _projects.first,
           );
-    if (!kIsWeb && (Platform.isMacOS || Platform.isWindows || Platform.isLinux)) {
-      PairingHost.instance.ensureStarted();
+    if (!kIsWeb && (Platform.isMacOS || Platform.isWindows || Platform.isLinux) &&
+        _activeProject != null) {
+      PairingHost.instance.startForProject(_activeProject!.name);
     }
+  }
+
+  @override
+  void dispose() {
+    PairingHost.instance.stop();
+    _mainScroll.dispose();
+    super.dispose();
+  }
+
+  void _setActiveProject(ProjectData? project) {
+    setState(() {
+      _activeProject = project;
+      _projects = _projects
+          .map(
+            (p) => p.copyWith(isActive: project != null && p.name == project.name),
+          )
+          .toList();
+    });
+    if (!kIsWeb && (Platform.isMacOS || Platform.isWindows || Platform.isLinux)) {
+      if (project != null) {
+        PairingHost.instance.startForProject(project.name);
+      } else {
+        PairingHost.instance.stop();
+      }
+    }
+  }
+
+  void _showSnack(BuildContext context, String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _createProject(BuildContext context) async {
+    final controller = TextEditingController();
+    final created = await showDialog<ProjectData>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('New Project'),
+          content: TextField(
+            controller: controller,
+            decoration: const InputDecoration(labelText: 'Project name'),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () {
+                if (controller.text.trim().isEmpty) return;
+                Navigator.pop(
+                  ctx,
+                  ProjectData(name: controller.text.trim(), sessions: 0, isActive: true),
+                );
+              },
+              child: const Text('Create'),
+            )
+          ],
+        );
+      },
+    );
+
+    if (created != null) {
+      setState(() {
+        _projects = [
+          created,
+          ..._projects.map((p) => p.copyWith(isActive: false)),
+        ];
+        _activeProject = created;
+      });
+      _showSnack(context, 'Project "${created.name}" created');
+    }
+  }
+
+  void _openSettings(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Settings'),
+        content: const Text('Settings panel coming soon. Pairing and projects are active.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+        ],
+      ),
+    );
+  }
+
+  void _importData(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Import Data'),
+        content: const Text(
+            'Drag a session archive into this window to import. For now this will simulate a successful import.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              setState(() {
+                final extra = SessionData(
+                  title: 'Imported Session ${_sessions.length + 1}',
+                  date: DateTime.now().toIso8601String().split('T').first,
+                  images: 3,
+                  temps: 1,
+                  status: 'Imported',
+                  statusColor: const Color(0xFF22C55E),
+                  icon: Icons.file_upload_outlined,
+                  iconColor: const Color(0xFF8B5CF6),
+                );
+                _sessions = [extra, ..._sessions];
+                _stats = _stats?.copyWith(
+                  sessions: (_stats?.sessions ?? 0) + 1,
+                  images: (_stats?.images ?? 0) + extra.images,
+                );
+              });
+              _showSnack(context, 'Import completed and added to recent sessions');
+            },
+            child: const Text('Simulate Import'),
+          )
+        ],
+      ),
+    );
+  }
+
+  void _connectPhone(BuildContext context) {
+    if (_activeProject == null) {
+      _showSnack(context, 'Select or create a project before pairing.');
+      return;
+    }
+    PairingHost.instance.startForProject(_activeProject!.name);
+    _showSnack(context, 'Pairing service ready for ${_activeProject!.name}.');
+  }
+
+  void _openSession(SessionData session) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(session.title),
+        content: Text('Captured on ${session.date}\n${session.images} images • ${session.temps} temps'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+        ],
+      ),
+    );
+  }
+
+  void _viewAllSessions() {
+    _mainScroll.animateTo(0, duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
   }
 
   @override
@@ -2570,6 +2717,10 @@ class ActiveCaptureScreen extends StatefulWidget {
 
 class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
   String? _lastSendSummary;
+  bool _temperatureLocked = false;
+  String? _temperatureValue;
+  bool _mutePrompts = false;
+  final List<Map<String, dynamic>> _queuedFrames = [];
 
   @override
   void dispose() {
@@ -2603,6 +2754,32 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
       'frame': base64Encode(frameBytes),
     };
 
+    final connected = widget.pairingChannel != null;
+
+    if (!_temperatureLocked) {
+      setState(() {
+        _queuedFrames.add(payload);
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Awaiting temperature lock before sending. Queued photo.')),
+        );
+      }
+      return;
+    }
+
+    if (!connected) {
+      setState(() {
+        _queuedFrames.add(payload);
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Desktop offline. Queued photo for later.')),
+        );
+      }
+      return;
+    }
+
     try {
       widget.pairingChannel?.sink.add(jsonEncode(payload));
       setState(() {
@@ -2617,6 +2794,21 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to send capture: $e')),
+      );
+    }
+  }
+
+  void _flushQueue() {
+    if (widget.pairingChannel == null || !_temperatureLocked) return;
+    for (final payload in _queuedFrames) {
+      widget.pairingChannel?.sink.add(jsonEncode(payload));
+    }
+    setState(() {
+      _queuedFrames.clear();
+    });
+    if (mounted && _queuedFrames.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Queued frames sent to desktop.')),
       );
     }
   }
@@ -2664,37 +2856,89 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
     return data?.buffer.asUint8List() ?? Uint8List(0);
   }
 
+  Future<void> _promptTemperature() async {
+    final entered = await Navigator.push<String?>(
+      context,
+      MaterialPageRoute(builder: (_) => TemperatureEntryScreen()),
+    );
+    if (entered == null || entered.trim().isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Temperature required before sending frames.')),
+        );
+      }
+      return;
+    }
+    setState(() {
+      _temperatureLocked = true;
+      _temperatureValue = entered.trim();
+    });
+    if (widget.pairingChannel != null) {
+      widget.pairingChannel?.sink.add(jsonEncode({
+        'type': 'temperature',
+        'value': entered.trim(),
+        'timestamp': DateTime.now().toIso8601String(),
+      }));
+    }
+    _flushQueue();
+  }
+
   @override
   Widget build(BuildContext context) {
     final roiState = RoiProvider.of(context);
     final connected = widget.pairingChannel != null;
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.sessionName),
-        actions: [
-          IconButton(
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => UploadQueueScreen(status: widget.status, items: const []),
+    return WillPopScope(
+      onWillPop: () async {
+        final proceed = await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Session running'),
+                content:
+                    const Text('Stop the session before leaving to avoid losing queued captures.'),
+                actions: [
+                  TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Stay')),
+                  TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('End Anyway')),
+                ],
               ),
-            ),
-            icon: const Icon(Icons.cloud_upload_outlined),
-          )
-        ],
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+            ) ??
+            false;
+        return proceed;
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(widget.sessionName),
+          actions: [
+            IconButton(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => UploadQueueScreen(status: widget.status, items: const []),
+                ),
+              ),
+              icon: const Icon(Icons.cloud_upload_outlined),
+            )
+          ],
+        ),
+        body: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
               children: [
                 Icon(Icons.circle, color: connected ? Colors.green : Colors.red, size: 12),
                 const SizedBox(width: 6),
                 Text(connected ? 'Connected to desktop' : 'Not connected'),
                 const Spacer(),
-                const Text('00:00:00'),
+                Row(
+                  children: [
+                    IconButton(
+                      onPressed: () => setState(() => _mutePrompts = !_mutePrompts),
+                      icon: Icon(_mutePrompts ? Icons.mic_off : Icons.mic),
+                    ),
+                    const Text('00:00:00'),
+                  ],
+                ),
               ],
             ),
             const SizedBox(height: 12),
@@ -2752,29 +2996,66 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
               ),
             ),
             const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: _temperatureLocked ? const Color(0xFFF0FDF4) : const Color(0xFFFFF7ED),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: _temperatureLocked ? const Color(0xFF22C55E) : const Color(0xFFF97316),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _temperatureLocked ? Icons.thermostat : Icons.warning_amber_rounded,
+                    color: _temperatureLocked ? const Color(0xFF16A34A) : const Color(0xFFD97706),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _temperatureLocked
+                              ? 'Temperature locked at ${_temperatureValue ?? '--'} °C'
+                              : 'Lock temperature before captures sync to desktop.',
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        Text(
+                          _queuedFrames.isEmpty
+                              ? 'Frames go live as soon as you capture.'
+                              : '${_queuedFrames.length} capture(s) queued until temperature is locked and desktop is ready.',
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  ElevatedButton(
+                    onPressed: _promptTemperature,
+                    child: Text(_temperatureLocked ? 'Update Temp' : 'Enter Temp'),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
             Wrap(
               spacing: 8,
-              runSpacing: 8,
-              children: [
-                ElevatedButton.icon(
-                  onPressed: connected ? () => _sendCapture(roiState) : null,
+                runSpacing: 8,
+                children: [
+                  ElevatedButton.icon(
+                  onPressed: connected && _temperatureLocked ? () => _sendCapture(roiState) : null,
                   icon: const Icon(Icons.camera_alt_outlined),
                   label: const Text('Capture Now'),
                 ),
                 OutlinedButton.icon(
-                  onPressed: () {},
+                  onPressed: connected && _temperatureLocked ? () {} : null,
                   icon: const Icon(Icons.timer),
                   label: const Text('Start Timed Capture'),
                 ),
                 OutlinedButton.icon(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => TemperatureEntryScreen(),
-                      ),
-                    );
-                  },
+                  onPressed: _promptTemperature,
                   icon: const Icon(Icons.thermostat),
                   label: const Text('Enter Temperature'),
                 ),
@@ -2884,11 +3165,17 @@ class _UploadStat extends StatelessWidget {
   }
 }
 
-class TemperatureEntryScreen extends StatelessWidget {
+class TemperatureEntryScreen extends StatefulWidget {
   TemperatureEntryScreen({super.key});
 
+  @override
+  State<TemperatureEntryScreen> createState() => _TemperatureEntryScreenState();
+}
+
+class _TemperatureEntryScreenState extends State<TemperatureEntryScreen> {
   final _tempController = TextEditingController();
   final _noteController = TextEditingController();
+  bool _muteVoice = false;
 
   @override
   Widget build(BuildContext context) {
@@ -2925,6 +3212,12 @@ class TemperatureEntryScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 12),
+            SwitchListTile(
+              value: _muteVoice,
+              onChanged: (value) => setState(() => _muteVoice = value),
+              title: const Text('Silence voice prompts while entering temperature'),
+              secondary: Icon(_muteVoice ? Icons.volume_off : Icons.volume_up_outlined),
+            ),
             Row(
               children: [
                 Expanded(
@@ -2936,7 +3229,7 @@ class TemperatureEntryScreen extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: () => Navigator.pop(context),
+                    onPressed: () => Navigator.pop(context, _tempController.text),
                     child: const Text('Save'),
                   ),
                 ),
@@ -3488,6 +3781,26 @@ class PairingCard extends StatelessWidget {
                 'Status: ${state.status}',
                 style: const TextStyle(fontWeight: FontWeight.w700),
               ),
+              if (state.lastTemperature != null || !state.temperatureLocked) ...[
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Icon(
+                      state.temperatureLocked ? Icons.thermostat : Icons.hourglass_bottom,
+                      color: state.temperatureLocked ? Colors.orange : Colors.red,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        state.temperatureLocked
+                            ? 'Temperature locked at ${state.lastTemperature ?? '--'}'
+                            : 'Awaiting temperature entry from phone before accepting images',
+                        style: const TextStyle(color: Color(0xFF4B5563)),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
               if (state.lastMessage != null) ...[
                 const SizedBox(height: 6),
                 const Text(
@@ -3535,6 +3848,19 @@ class PairingCard extends StatelessWidget {
                   style: const TextStyle(color: Color(0xFF0F172A), fontWeight: FontWeight.w600),
                 ),
               ],
+              if (state.lastFrameBytes != null && state.temperatureLocked) ...[
+                const SizedBox(height: 12),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Evaluation pipeline will run here (OpenCV stub).')),
+                    );
+                  },
+                  icon: const Icon(Icons.play_arrow),
+                  label: const Text('Start Evaluating'),
+                  style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(44)),
+                ),
+              ]
             ],
           ),
         );
@@ -3552,6 +3878,8 @@ class PairingServerState {
   final String? lastMessage;
   final String? lastFrameSummary;
   final Uint8List? lastFrameBytes;
+  final String? lastTemperature;
+  final bool temperatureLocked;
 
   const PairingServerState({
     required this.running,
@@ -3562,6 +3890,8 @@ class PairingServerState {
     required this.lastMessage,
     required this.lastFrameSummary,
     required this.lastFrameBytes,
+    required this.lastTemperature,
+    required this.temperatureLocked,
   });
 
   PairingServerState copyWith({
@@ -3573,6 +3903,8 @@ class PairingServerState {
     String? lastMessage,
     String? lastFrameSummary,
     Uint8List? lastFrameBytes,
+    String? lastTemperature,
+    bool? temperatureLocked,
   }) {
     return PairingServerState(
       running: running ?? this.running,
@@ -3583,6 +3915,8 @@ class PairingServerState {
       lastMessage: lastMessage ?? this.lastMessage,
       lastFrameSummary: lastFrameSummary ?? this.lastFrameSummary,
       lastFrameBytes: lastFrameBytes ?? this.lastFrameBytes,
+      lastTemperature: lastTemperature ?? this.lastTemperature,
+      temperatureLocked: temperatureLocked ?? this.temperatureLocked,
     );
   }
 }
@@ -3601,6 +3935,8 @@ class PairingHost {
     lastMessage: null,
     lastFrameSummary: null,
     lastFrameBytes: null,
+    lastTemperature: null,
+    temperatureLocked: false,
   ));
 
   HttpServer? _server;
@@ -3609,7 +3945,8 @@ class PairingHost {
   String? _host;
   int _port = 0;
 
-  Future<void> ensureStarted() async {
+  Future<void> startForProject(String projectName) async {
+    await stop();
     if (state.value.running) return;
     if (kIsWeb) return;
     try {
@@ -3627,18 +3964,47 @@ class PairingHost {
       _server = await HttpServer.bind(InternetAddress.anyIPv4, 8787);
       _port = _server!.port;
       _server!.listen(_handleRequest);
-      final qr = 'ws://$_host:$_port/pair?token=$_token&mode=live';
+      final qr =
+          'ws://$_host:$_port/pair?token=$_token&mode=live&project=${Uri.encodeComponent(projectName)}';
       state.value = state.value.copyWith(
         running: true,
-        status: 'Awaiting scan',
+        status: 'Awaiting scan for $projectName',
         qrData: qr,
         displayHost: 'ws://$_host:$_port',
+        temperatureLocked: false,
+        lastTemperature: null,
+        lastFrameBytes: null,
+        lastFrameSummary: null,
+        lastMessage: null,
       );
     } catch (e) {
       state.value = state.value.copyWith(
         status: 'Failed to start pairing: $e',
       );
     }
+  }
+
+  Future<void> stop() async {
+    try {
+      await _client?.close();
+    } catch (_) {}
+    try {
+      await _server?.close(force: true);
+    } catch (_) {}
+    _client = null;
+    _server = null;
+    state.value = const PairingServerState(
+      running: false,
+      connected: false,
+      status: 'Not started',
+      qrData: null,
+      displayHost: '',
+      lastMessage: null,
+      lastFrameSummary: null,
+      lastFrameBytes: null,
+      lastTemperature: null,
+      temperatureLocked: false,
+    );
   }
 
   Future<void> _handleRequest(HttpRequest request) async {
@@ -3684,6 +4050,23 @@ class PairingHost {
             if (frameBytes != null) {
               _forwardForAnalysis(frameBytes);
             }
+            return;
+          }
+          if (payload is Map && payload['type'] == 'temperature') {
+            final value = payload['value']?.toString();
+            state.value = state.value.copyWith(
+              lastMessage: raw,
+              lastTemperature: value,
+              temperatureLocked: true,
+              status: 'Temperature locked at ${value ?? '--'}',
+            );
+            return;
+          }
+          if (payload is Map && payload['type'] == 'session_start') {
+            state.value = state.value.copyWith(
+              lastMessage: raw,
+              status: 'Session ${payload['session'] ?? ''} ready',
+            );
             return;
           }
         } catch (_) {}
