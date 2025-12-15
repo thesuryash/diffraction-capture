@@ -327,67 +327,6 @@ class _DesktopDashboardState extends State<DesktopDashboard> {
     _mainScroll.animateTo(0, duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
   }
 
-  @override
-  void dispose() {
-    _mainScroll.dispose();
-    super.dispose();
-  }
-
-  void _setActiveProject(ProjectData? project) {
-    setState(() {
-      _activeProject = project;
-      _projects = _projects
-          .map(
-            (p) => p.copyWith(isActive: project != null && p.name == project.name),
-          )
-          .toList();
-    });
-  }
-
-  void _showSnack(BuildContext context, String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-  }
-
-  Future<void> _createProject(BuildContext context) async {
-    final controller = TextEditingController();
-    final created = await showDialog<ProjectData>(
-      context: context,
-      builder: (ctx) {
-        return AlertDialog(
-          title: const Text('New Project'),
-          content: TextField(
-            controller: controller,
-            decoration: const InputDecoration(labelText: 'Project name'),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-            ElevatedButton(
-              onPressed: () {
-                if (controller.text.trim().isEmpty) return;
-                Navigator.pop(
-                  ctx,
-                  ProjectData(name: controller.text.trim(), sessions: 0, isActive: true),
-                );
-              },
-              child: const Text('Create'),
-            )
-          ],
-        );
-      },
-    );
-
-    if (created != null) {
-      setState(() {
-        _projects = [
-          created,
-          ..._projects.map((p) => p.copyWith(isActive: false)),
-        ];
-        _activeProject = created;
-      });
-      _showSnack(context, 'Project "${created.name}" created');
-    }
-  }
-
   void _openSettings(BuildContext context) {
     showDialog(
       context: context,
@@ -3042,9 +2981,9 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
             const SizedBox(height: 12),
             Wrap(
               spacing: 8,
-                runSpacing: 8,
-                children: [
-                  ElevatedButton.icon(
+              runSpacing: 8,
+              children: [
+                ElevatedButton.icon(
                   onPressed: connected && _temperatureLocked ? () => _sendCapture(roiState) : null,
                   icon: const Icon(Icons.camera_alt_outlined),
                   label: const Text('Capture Now'),
