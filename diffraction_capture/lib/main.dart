@@ -1397,22 +1397,22 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
     } else {
       final sessionTitle =
           _nameController.text.isEmpty ? 'New Session' : _nameController.text;
+      final navigator = Navigator.of(context);
       _pairingTransferred = true;
       _pairingSub?.cancel();
-      Navigator.pushReplacement(
-        context,
+      navigator.pushReplacement(
         MaterialPageRoute(
           builder: (_) => CameraAlignmentScreen(
             sessionName: sessionTitle,
             pairingChannel: _pairingChannel,
             onStart: () {
-              Navigator.pushReplacement(
-                context,
+              navigator.pushReplacement(
                 MaterialPageRoute(
                   builder: (_) => ActiveCaptureScreen(
                     sessionName: sessionTitle,
                     status: CaptureStatus.zero(),
                     pairingChannel: _pairingChannel,
+                    showMonitorOnStart: true,
                   ),
                 ),
               );
@@ -1474,6 +1474,7 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
   }) async {
     _pairingSub?.cancel();
     await _pairingChannel?.sink.close();
+    if (!mounted) return;
     setState(() {
       pairingConnecting = true;
       pairingError = null;
@@ -1484,6 +1485,7 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
       final channel = WebSocketChannel.connect(uri);
       _pairingChannel = channel;
       _pairingSub = channel.stream.listen((event) {
+        if (!mounted) return;
         setState(() {
           pairingConnected = true;
           pairingConnecting = false;
@@ -1491,6 +1493,7 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
               'Connected to ${uri.host.isNotEmpty ? uri.host : raw} (${mode.toUpperCase()})';
         });
       }, onError: (err) {
+        if (!mounted) return;
         setState(() {
           pairingConnecting = false;
           pairingConnected = false;
@@ -1498,6 +1501,7 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
           pairingStatus = 'Not connected';
         });
       }, onDone: () {
+        if (!mounted) return;
         setState(() {
           pairingConnected = false;
           pairingConnecting = false;
@@ -1517,6 +1521,7 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
         'timestamp': DateTime.now().toIso8601String(),
       }));
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         pairingConnecting = false;
         pairingConnected = false;
@@ -2148,6 +2153,7 @@ class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
   bool _focusLocked = false;
   bool _whiteBalanceLocked = false;
   bool _startingSession = false;
+  Size? _lastPreviewSize;
 
   @override
   void initState() {
@@ -2349,7 +2355,12 @@ class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
                 child: LayoutBuilder(
                   builder: (context, constraints) {
                     final size = Size(constraints.maxWidth, constraints.maxHeight);
-                    roiState.updatePreviewSize(size);
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (!mounted) return;
+                      if (_lastPreviewSize == size) return;
+                      _lastPreviewSize = size;
+                      roiState.updatePreviewSize(size);
+                    });
                     final normalized = _dragRect ?? roiState.normalizedRect;
                     final roiPixels = Rect.fromLTWH(
                       normalized.left * size.width,
@@ -2569,12 +2580,14 @@ class ActiveCaptureScreen extends StatefulWidget {
   final String sessionName;
   final CaptureStatus status;
   final WebSocketChannel? pairingChannel;
+  final bool showMonitorOnStart;
 
   const ActiveCaptureScreen({
     super.key,
     required this.sessionName,
     required this.status,
     this.pairingChannel,
+    this.showMonitorOnStart = false,
   });
 
   @override
@@ -2587,24 +2600,50 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
   String? _temperatureValue;
   bool _mutePrompts = false;
   bool _isSending = false;
+  bool _timedWindowBusy = false;
   final List<Map<String, dynamic>> _queuedFrames = [];
   final Duration _timedInterval = const Duration(seconds: 8);
   final ValueNotifier<List<_CapturedPhoto>> _capturedPhotos =
       ValueNotifier<List<_CapturedPhoto>>([]);
+  late final ValueNotifier<_MonitorStatus> _monitorStatus;
+  bool _monitorOpen = false;
+  Size? _lastPreviewSize;
 
   @override
   void dispose() {
     widget.pairingChannel?.sink.close();
     _capturedPhotos.dispose();
+    _monitorStatus.dispose();
     super.dispose();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _monitorStatus = ValueNotifier<_MonitorStatus>(
+      _MonitorStatus(
+        connected: widget.pairingChannel != null,
+        temperatureLocked: _temperatureLocked,
+        queuedFrames: _queuedFrames.length,
+      ),
+    );
+    if (widget.showMonitorOnStart) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final roiState = RoiProvider.of(context);
+        _openTimedCaptureWindow(roiState);
+      });
+    }
   }
 
   Future<void> _sendCapture(RoiState roiState) async {
     if (_isSending) return;
+    if (!mounted) return;
     setState(() => _isSending = true);
     final size = roiState.previewSize ?? const Size(1080, 1920);
     final roiPixels = roiState.pixelRectFor(size);
     final frameBytes = await _buildRoiPreview(size, roiPixels);
+    if (!mounted) return;
+
     final payload = {
       'type': 'frame',
       'session': widget.sessionName,
@@ -2631,60 +2670,39 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
 
     final connected = widget.pairingChannel != null;
 
-    if (!_temperatureLocked) {
-      setState(() => _isSending = false);
+    if (!_temperatureLocked || !connected) {
+      if (!mounted) return;
       setState(() {
         _queuedFrames.add(payload);
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Awaiting temperature lock before sending. Queued photo.')),
-        );
-      }
-      return;
-    }
-
-    if (!connected) {
-      setState(() => _isSending = false);
-      setState(() {
-        _queuedFrames.add(payload);
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Desktop offline. Queued photo for later.')),
-        );
-      }
-      return;
-    }
-
-    try {
-      widget.pairingChannel?.sink.add(jsonEncode(payload));
-      setState(() {
-        _lastSendSummary =
-            'Sent ROI ${roiPixels.width.toStringAsFixed(0)}x${roiPixels.height.toStringAsFixed(0)} at (${roiPixels.left.toStringAsFixed(0)}, ${roiPixels.top.toStringAsFixed(0)})';
         _isSending = false;
       });
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Capture sent with ROI metadata')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _isSending = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to send capture: $e')),
-      );
+      _updateMonitorStatus();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              _temperatureLocked
+                  ? 'Desktop offline. Queued photo for later.'
+                  : 'Awaiting temperature lock before sending. Queued photo.',
+            ),
+          ),
+        );
+      }
+      return;
     }
+
+    await _sendCaptureToDesktop(payload, roiPixels: roiPixels);
+    if (!mounted) return;
+    setState(() => _isSending = false);
   }
 
   void _flushQueue() {
     if (widget.pairingChannel == null || !_temperatureLocked) return;
-    for (final payload in _queuedFrames) {
-      widget.pairingChannel?.sink.add(jsonEncode(payload));
+    for (final payload in List<Map<String, dynamic>>.from(_queuedFrames)) {
+      _sendCaptureToDesktop(payload);
     }
-    setState(() {
-      _queuedFrames.clear();
-    });
+    setState(() => _queuedFrames.clear());
+    _updateMonitorStatus();
     if (mounted && _queuedFrames.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Queued frames sent to desktop.')),
@@ -2739,6 +2757,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
       context,
       MaterialPageRoute(builder: (_) => TemperatureEntryScreen()),
     );
+    if (!mounted) return;
     if (entered == null || entered.trim().isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -2751,6 +2770,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
       _temperatureLocked = true;
       _temperatureValue = entered.trim();
     });
+    _updateMonitorStatus();
     if (widget.pairingChannel != null) {
       widget.pairingChannel?.sink.add(jsonEncode({
         'type': 'temperature',
@@ -2772,17 +2792,62 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
       ..._capturedPhotos.value,
     ];
     _capturedPhotos.value = updated.take(12).toList();
+    _updateMonitorStatus();
   }
 
   void _openTimedCaptureWindow(RoiState roiState) {
+    if (_monitorOpen) return;
+    if (!mounted) return;
+
+    final nav = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    _monitorOpen = true;
     showDialog(
-      context: context,
+      context: nav.context,
       builder: (_) => TimedCaptureWindow(
         photos: _capturedPhotos,
         interval: _timedInterval,
-        onClose: () => Navigator.of(context).pop(),
+        status: _monitorStatus,
+        onClose: () {
+          _monitorOpen = false;
+          nav.pop();
+        },
         onCapture: () => _sendCapture(roiState),
       ),
+    ).then((_) {
+      _monitorOpen = false;
+      if (mounted) {
+        messenger.clearSnackBars();
+      }
+    });
+  }
+
+  Future<void> _sendCaptureToDesktop(Map<String, dynamic> payload, {Rect? roiPixels}) async {
+    try {
+      widget.pairingChannel?.sink.add(jsonEncode(payload));
+      if (!mounted) return;
+      setState(() {
+        if (roiPixels != null) {
+          _lastSendSummary =
+              'Sent ROI ${roiPixels.width.toStringAsFixed(0)}x${roiPixels.height.toStringAsFixed(0)} at (${roiPixels.left.toStringAsFixed(0)}, ${roiPixels.top.toStringAsFixed(0)})';
+        }
+      });
+      _updateMonitorStatus();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Capture sent with ROI metadata')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to send capture: $e')),
+      );
+    }
+  }
+
+  void _updateMonitorStatus() {
+    _monitorStatus.value = _monitorStatus.value.copyWith(
+      temperatureLocked: _temperatureLocked,
+      queuedFrames: _queuedFrames.length,
     );
   }
 
@@ -2856,7 +2921,12 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                   child: LayoutBuilder(
                     builder: (context, constraints) {
                       final size = Size(constraints.maxWidth, constraints.maxHeight);
-                      roiState.updatePreviewSize(size);
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (!mounted) return;
+                        if (_lastPreviewSize == size) return;
+                        _lastPreviewSize = size;
+                        roiState.updatePreviewSize(size);
+                      });
                       final roiPixels = roiState.pixelRectFor(size);
                       return Stack(
                         children: [
@@ -2963,7 +3033,18 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                   ),
                   OutlinedButton.icon(
                     onPressed: connected && _temperatureLocked
-                        ? () => _openTimedCaptureWindow(roiState)
+                        ? () async {
+                            if (_timedWindowBusy) return;
+                            _timedWindowBusy = true;
+                            try {
+                              if (!mounted) return;
+                              _openTimedCaptureWindow(roiState);
+                            } finally {
+                              if (mounted) {
+                                _timedWindowBusy = false;
+                              }
+                            }
+                          }
                         : null,
                     icon: const Icon(Icons.timer),
                     label: const Text('Start Timed Capture'),
@@ -3059,7 +3140,8 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
       ),
     );
   }
-  }
+}
+
 class _UploadStat extends StatelessWidget {
   final String label;
   final int value;
@@ -3099,9 +3181,65 @@ class _CapturedPhoto {
   }
 }
 
+class _MonitorStatus {
+  final bool connected;
+  final bool temperatureLocked;
+  final int queuedFrames;
+
+  const _MonitorStatus({
+    required this.connected,
+    required this.temperatureLocked,
+    required this.queuedFrames,
+  });
+
+  _MonitorStatus copyWith({bool? connected, bool? temperatureLocked, int? queuedFrames}) {
+    return _MonitorStatus(
+      connected: connected ?? this.connected,
+      temperatureLocked: temperatureLocked ?? this.temperatureLocked,
+      queuedFrames: queuedFrames ?? this.queuedFrames,
+    );
+  }
+}
+
+class _MonitorStatusChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  const _MonitorStatusChip({
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.4)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: TextStyle(color: color, fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class TimedCaptureWindow extends StatefulWidget {
   final ValueNotifier<List<_CapturedPhoto>> photos;
   final Duration interval;
+  final ValueListenable<_MonitorStatus> status;
   final Future<void> Function() onCapture;
   final VoidCallback onClose;
 
@@ -3109,6 +3247,7 @@ class TimedCaptureWindow extends StatefulWidget {
     super.key,
     required this.photos,
     required this.interval,
+    required this.status,
     required this.onCapture,
     required this.onClose,
   });
@@ -3142,16 +3281,19 @@ class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
   }
 
   Future<void> _tick() async {
+    if (!mounted) return;
     if (!_running) return;
     if (_secondsRemaining <= 1) {
       await _triggerCapture();
+      if (!mounted) return;
       return;
     }
+    if (!mounted) return;
     setState(() => _secondsRemaining -= 1);
   }
 
   Future<void> _triggerCapture() async {
-    if (_captureInFlight) return;
+    if (!mounted || _captureInFlight) return;
     setState(() {
       _captureInFlight = true;
       _secondsRemaining = widget.interval.inSeconds;
@@ -3159,9 +3301,8 @@ class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
     try {
       await widget.onCapture();
     } finally {
-      if (mounted) {
-        setState(() => _captureInFlight = false);
-      }
+      if (!mounted) return;
+      setState(() => _captureInFlight = false);
     }
   }
 
@@ -3200,6 +3341,60 @@ class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
                     icon: const Icon(Icons.close),
                   ),
                 ],
+              ),
+              const SizedBox(height: 4),
+              ValueListenableBuilder<_MonitorStatus>(
+                valueListenable: widget.status,
+                builder: (context, status, _) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Live status',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _MonitorStatusChip(
+                            icon: status.connected
+                                ? Icons.desktop_windows_outlined
+                                : Icons.desktop_access_disabled,
+                            label: status.connected
+                                ? 'Desktop link ready'
+                                : 'Desktop offline',
+                            color:
+                                status.connected ? const Color(0xFF16A34A) : const Color(0xFFF97316),
+                          ),
+                          _MonitorStatusChip(
+                            icon: status.temperatureLocked
+                                ? Icons.thermostat
+                                : Icons.thermostat_auto_outlined,
+                            label: status.temperatureLocked
+                                ? 'Temperature locked'
+                                : 'Waiting for temperature lock',
+                            color: status.temperatureLocked
+                                ? const Color(0xFF0EA5E9)
+                                : const Color(0xFFE11D48),
+                          ),
+                          _MonitorStatusChip(
+                            icon: status.queuedFrames > 0
+                                ? Icons.schedule_send
+                                : Icons.check_circle_outline,
+                            label: status.queuedFrames > 0
+                                ? '${status.queuedFrames} capture(s) queued'
+                                : 'All captures delivered',
+                            color: status.queuedFrames > 0
+                                ? const Color(0xFFF59E0B)
+                                : const Color(0xFF16A34A),
+                          ),
+                        ],
+                      ),
+                    ],
+                  );
+                },
               ),
               const SizedBox(height: 12),
               Container(
@@ -3249,10 +3444,16 @@ class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
                           label: const Text('Capture now'),
                         ),
                         const SizedBox(width: 12),
-                        OutlinedButton.icon(
-                          onPressed: _toggleRunning,
-                          icon: Icon(_running ? Icons.pause : Icons.play_arrow),
-                          label: Text(_running ? 'Pause countdown' : 'Resume countdown'),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _toggleRunning,
+                            icon: Icon(_running ? Icons.pause : Icons.play_arrow),
+                            label: Text(
+                              _running ? 'Pause countdown' : 'Resume countdown',
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -3856,17 +4057,30 @@ Color _badgeColor(String badge) {
   }
 }
 
-class PairingCard extends StatelessWidget {
+class PairingCard extends StatefulWidget {
   final ProjectData? activeProject;
 
   const PairingCard({super.key, required this.activeProject});
+
+  @override
+  State<PairingCard> createState() => _PairingCardState();
+}
+
+class _PairingCardState extends State<PairingCard> {
+  final ScrollController _messageScrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _messageScrollController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<PairingServerState>(
       valueListenable: PairingHost.instance.state,
       builder: (context, state, _) {
-        if (activeProject == null) {
+        if (widget.activeProject == null) {
           return _Card(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -3894,7 +4108,7 @@ class PairingCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Phone Connection • ${activeProject!.name}',
+                'Phone Connection • ${widget.activeProject!.name}',
                 style: const TextStyle(
                   color: Color(0xFF6B7280),
                   fontWeight: FontWeight.w600,
@@ -3985,8 +4199,10 @@ class PairingCard extends StatelessWidget {
                     border: Border.all(color: const Color(0xFFE5E7EB)),
                   ),
                   child: Scrollbar(
+                    controller: _messageScrollController,
                     thumbVisibility: true,
                     child: SingleChildScrollView(
+                      controller: _messageScrollController,
                       child: Text(
                         state.lastMessage ?? '',
                         style: const TextStyle(color: Color(0xFF6B7280)),
