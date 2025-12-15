@@ -169,8 +169,12 @@ class _DesktopDashboardState extends State<DesktopDashboard> {
     _projects = widget.data.projects;
     _sessions = widget.data.sessions;
     _stats = widget.data.stats;
-    _activeProject =
-        _projects.firstWhere((p) => p.isActive, orElse: () => _projects.isNotEmpty ? _projects.first : null);
+    _activeProject = _projects.isEmpty
+        ? null
+        : _projects.firstWhere(
+            (p) => p.isActive,
+            orElse: () => _projects.first,
+          );
     if (!kIsWeb && (Platform.isMacOS || Platform.isWindows || Platform.isLinux)) {
       PairingHost.instance.ensureStarted();
     }
@@ -3522,13 +3526,6 @@ class PairingCard extends StatelessWidget {
                       gaplessPlayback: true,
                     ),
                   ),
-                ),
-              ],
-              if (state.lastFrameSummary != null) ...[
-                const SizedBox(height: 6),
-                Text(
-                  'Last ROI frame: ${state.lastFrameSummary}',
-                  style: const TextStyle(color: Color(0xFF0F172A), fontWeight: FontWeight.w600),
                 ),
               ],
               if (state.lastFrameSummary != null) ...[
