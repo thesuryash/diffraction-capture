@@ -1924,6 +1924,10 @@ class CameraAlignmentScreen extends StatefulWidget {
 class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
   Rect? _dragRect;
   late final MobileScannerController _cameraController;
+  bool _exposureLocked = false;
+  bool _focusLocked = false;
+  bool _whiteBalanceLocked = false;
+  bool _startingSession = false;
 
   @override
   void initState() {
@@ -1949,6 +1953,35 @@ class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
     setState(() {
       _dragRect = state.normalizedRect;
     });
+  }
+
+  void _toggleLock({
+    bool? exposure,
+    bool? focus,
+    bool? whiteBalance,
+  }) {
+    setState(() {
+      if (exposure != null) _exposureLocked = exposure;
+      if (focus != null) _focusLocked = focus;
+      if (whiteBalance != null) _whiteBalanceLocked = whiteBalance;
+    });
+
+    if (widget.pairingChannel != null) {
+      try {
+        widget.pairingChannel!.sink.add(jsonEncode({
+          'type': 'lock_update',
+          'timestamp': DateTime.now().toIso8601String(),
+          'session': widget.sessionName,
+          'locks': {
+            'exposure': _exposureLocked,
+            'focus': _focusLocked,
+            'whiteBalance': _whiteBalanceLocked,
+          },
+        }));
+      } catch (e) {
+        debugPrint('Failed to send lock update: $e');
+      }
+    }
   }
 
   void _handleResize(DragUpdateDetails details, Size size, RoiState state,
@@ -1983,6 +2016,73 @@ class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
         current.height,
       ),
     );
+  }
+
+  Future<void> _startSession(RoiState state) async {
+    if (_startingSession) return;
+    setState(() {
+      _startingSession = true;
+    });
+
+    final previewSize = state.previewSize ?? const Size(1080, 1920);
+    final roiPixels = state.pixelRectFor(previewSize);
+
+    if (widget.pairingChannel != null) {
+      try {
+        widget.pairingChannel!.sink.add(jsonEncode({
+          'type': 'session_start',
+          'session': widget.sessionName,
+          'timestamp': DateTime.now().toIso8601String(),
+          'roi': {
+            'normalized': {
+              'left': state.normalizedRect.left,
+              'top': state.normalizedRect.top,
+              'width': state.normalizedRect.width,
+              'height': state.normalizedRect.height,
+            },
+            'pixels': {
+              'x': roiPixels.left,
+              'y': roiPixels.top,
+              'width': roiPixels.width,
+              'height': roiPixels.height,
+            },
+            'previewSize': {
+              'width': previewSize.width,
+              'height': previewSize.height,
+            },
+          },
+          'locks': {
+            'exposure': _exposureLocked,
+            'focus': _focusLocked,
+            'whiteBalance': _whiteBalanceLocked,
+          },
+        }));
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Session started and sent to desktop')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to notify desktop: $e')),
+          );
+        }
+      }
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Starting locally (no desktop pairing)')),
+        );
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _startingSession = false;
+      });
+      widget.onStart();
+    }
   }
 
   Widget _handleAt(Offset position, Size size, RoiState state,
@@ -2116,10 +2216,13 @@ class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
                           bottom: 12,
                           left: 12,
                           child: Row(
-                            children: const [
-                              Icon(Icons.brightness_6, color: Colors.white70),
-                              SizedBox(width: 6),
-                              Text('Brightness OK', style: TextStyle(color: Colors.white70)),
+                            children: [
+                              const Icon(Icons.brightness_6, color: Colors.white70),
+                              const SizedBox(width: 6),
+                              Text(
+                                _exposureLocked ? 'Exposure locked' : 'Brightness OK',
+                                style: const TextStyle(color: Colors.white70),
+                              ),
                             ],
                           ),
                         ),
@@ -2127,10 +2230,18 @@ class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
                           bottom: 12,
                           right: 12,
                           child: Row(
-                            children: const [
-                              Icon(Icons.center_focus_strong, color: Colors.white70),
-                              SizedBox(width: 6),
-                              Text('Sharpness OK', style: TextStyle(color: Colors.white70)),
+                            children: [
+                              Icon(
+                                _focusLocked
+                                    ? Icons.center_focus_weak_outlined
+                                    : Icons.center_focus_strong,
+                                color: Colors.white70,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                _focusLocked ? 'Focus locked' : 'Sharpness OK',
+                                style: const TextStyle(color: Colors.white70),
+                              ),
                             ],
                           ),
                         ),
@@ -2147,18 +2258,47 @@ class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
               children: [
                 FilterChip(
                   label: const Text('Lock exposure'),
-                  selected: false,
-                  onSelected: (_) {},
+                  selected: _exposureLocked,
+                  onSelected: (value) {
+                    _toggleLock(exposure: value);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          value ? 'Exposure locked' : 'Exposure auto adjusts',
+                        ),
+                      ),
+                    );
+                  },
                 ),
                 FilterChip(
                   label: const Text('Lock focus'),
-                  selected: false,
-                  onSelected: (_) {},
+                  selected: _focusLocked,
+                  onSelected: (value) {
+                    _toggleLock(focus: value);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          value ? 'Focus locked' : 'Focus auto adjusts',
+                        ),
+                      ),
+                    );
+                  },
                 ),
                 FilterChip(
                   label: const Text('Lock white balance'),
-                  selected: false,
-                  onSelected: (_) {},
+                  selected: _whiteBalanceLocked,
+                  onSelected: (value) {
+                    _toggleLock(whiteBalance: value);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          value
+                              ? 'White balance locked'
+                              : 'White balance auto adjusts',
+                        ),
+                      ),
+                    );
+                  },
                 ),
               ],
             ),
@@ -2174,8 +2314,18 @@ class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: widget.onStart,
-                    child: const Text('Start Session'),
+                    onPressed: _startingSession
+                        ? null
+                        : () async {
+                            await _startSession(roiState);
+                          },
+                    child: _startingSession
+                        ? const SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Start Session'),
                   ),
                 ),
               ],
