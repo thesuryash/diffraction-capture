@@ -1475,6 +1475,7 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
   }) async {
     _pairingSub?.cancel();
     await _pairingChannel?.sink.close();
+    if (!mounted) return;
     setState(() {
       pairingConnecting = true;
       pairingError = null;
@@ -1485,6 +1486,7 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
       final channel = WebSocketChannel.connect(uri);
       _pairingChannel = channel;
       _pairingSub = channel.stream.listen((event) {
+        if (!mounted) return;
         setState(() {
           pairingConnected = true;
           pairingConnecting = false;
@@ -1492,6 +1494,7 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
               'Connected to ${uri.host.isNotEmpty ? uri.host : raw} (${mode.toUpperCase()})';
         });
       }, onError: (err) {
+        if (!mounted) return;
         setState(() {
           pairingConnecting = false;
           pairingConnected = false;
@@ -1499,6 +1502,7 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
           pairingStatus = 'Not connected';
         });
       }, onDone: () {
+        if (!mounted) return;
         setState(() {
           pairingConnected = false;
           pairingConnecting = false;
@@ -1518,6 +1522,7 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
         'timestamp': DateTime.now().toIso8601String(),
       }));
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         pairingConnecting = false;
         pairingConnected = false;
@@ -2149,6 +2154,7 @@ class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
   bool _focusLocked = false;
   bool _whiteBalanceLocked = false;
   bool _startingSession = false;
+  Size? _lastPreviewSize;
 
   @override
   void initState() {
@@ -2350,7 +2356,12 @@ class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
                 child: LayoutBuilder(
                   builder: (context, constraints) {
                     final size = Size(constraints.maxWidth, constraints.maxHeight);
-                    roiState.updatePreviewSize(size);
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (!mounted) return;
+                      if (_lastPreviewSize == size) return;
+                      _lastPreviewSize = size;
+                      roiState.updatePreviewSize(size);
+                    });
                     final normalized = _dragRect ?? roiState.normalizedRect;
                     final roiPixels = Rect.fromLTWH(
                       normalized.left * size.width,
@@ -2596,6 +2607,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
       ValueNotifier<List<_CapturedPhoto>>([]);
   late final ValueNotifier<_MonitorStatus> _monitorStatus;
   bool _monitorOpen = false;
+  Size? _lastPreviewSize;
 
   @override
   void dispose() {
@@ -2896,7 +2908,12 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                   child: LayoutBuilder(
                     builder: (context, constraints) {
                       final size = Size(constraints.maxWidth, constraints.maxHeight);
-                      roiState.updatePreviewSize(size);
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (!mounted) return;
+                        if (_lastPreviewSize == size) return;
+                        _lastPreviewSize = size;
+                        roiState.updatePreviewSize(size);
+                      });
                       final roiPixels = roiState.pixelRectFor(size);
                       return Stack(
                         children: [
@@ -4008,17 +4025,30 @@ Color _badgeColor(String badge) {
   }
 }
 
-class PairingCard extends StatelessWidget {
+class PairingCard extends StatefulWidget {
   final ProjectData? activeProject;
 
   const PairingCard({super.key, required this.activeProject});
+
+  @override
+  State<PairingCard> createState() => _PairingCardState();
+}
+
+class _PairingCardState extends State<PairingCard> {
+  final ScrollController _messageScrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _messageScrollController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<PairingServerState>(
       valueListenable: PairingHost.instance.state,
       builder: (context, state, _) {
-        if (activeProject == null) {
+        if (widget.activeProject == null) {
           return _Card(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -4046,7 +4076,7 @@ class PairingCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Phone Connection • ${activeProject!.name}',
+                'Phone Connection • ${widget.activeProject!.name}',
                 style: const TextStyle(
                   color: Color(0xFF6B7280),
                   fontWeight: FontWeight.w600,
@@ -4137,8 +4167,10 @@ class PairingCard extends StatelessWidget {
                     border: Border.all(color: const Color(0xFFE5E7EB)),
                   ),
                   child: Scrollbar(
+                    controller: _messageScrollController,
                     thumbVisibility: true,
                     child: SingleChildScrollView(
+                      controller: _messageScrollController,
                       child: Text(
                         state.lastMessage ?? '',
                         style: const TextStyle(color: Color(0xFF6B7280)),
