@@ -2707,15 +2707,14 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
         ..strokeWidth = 4,
     );
 
-      final label = TextPainter(
-        text: TextSpan(
-          text: '${roiPixels.width.toStringAsFixed(0)} x ${roiPixels.height.toStringAsFixed(0)} @ (${roiPixels.left.toStringAsFixed(0)}, ${roiPixels.top.toStringAsFixed(0)})',
-          style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout(maxWidth: width - 24);
-      )..layout(maxWidth: width - 24);
-    label.paint(canvas, Offset(12, 12));
+        final label = TextPainter(
+          text: TextSpan(
+            text: '${roiPixels.width.toStringAsFixed(0)} x ${roiPixels.height.toStringAsFixed(0)} @ (${roiPixels.left.toStringAsFixed(0)}, ${roiPixels.top.toStringAsFixed(0)})',
+            style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout(maxWidth: width - 24);
+      label.paint(canvas, Offset(12, 12));
 
     final image = await recorder.endRecording().toImage(width, height);
     final data = await image.toByteData(format: ImageByteFormat.png);
