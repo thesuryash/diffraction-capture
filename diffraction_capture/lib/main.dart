@@ -19,7 +19,7 @@ void main() {
 class DiffractionApp extends StatelessWidget {
   const DiffractionApp({super.key});
 
-  @override
+    @override
   Widget build(BuildContext context) {
     return RoiProvider(
       notifier: RoiState(),
@@ -2748,7 +2748,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
     _flushQueue();
   }
 
-  @override
+    @override
   Widget build(BuildContext context) {
     final roiState = RoiProvider.of(context);
     final connected = widget.pairingChannel != null;
@@ -2758,8 +2758,9 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
               context: context,
               builder: (ctx) => AlertDialog(
                 title: const Text('Session running'),
-                content:
-                    const Text('Stop the session before leaving to avoid losing queued captures.'),
+                content: const Text(
+                  'Stop the session before leaving to avoid losing queued captures.',
+                ),
                 actions: [
                   TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Stay')),
                   TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('End Anyway')),
@@ -2781,7 +2782,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                 ),
               ),
               icon: const Icon(Icons.cloud_upload_outlined),
-            )
+            ),
           ],
         ),
         body: Padding(
@@ -2807,210 +2808,212 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                 ],
               ),
               const SizedBox(height: 12),
-            Expanded(
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final size = Size(constraints.maxWidth, constraints.maxHeight);
-                    roiState.updatePreviewSize(size);
-                    final roiPixels = roiState.pixelRectFor(size);
-                    return Stack(
-                      children: [
-                        Container(color: Colors.black),
-                        Positioned(
-                          left: roiPixels.left,
-                          top: roiPixels.top,
-                          width: roiPixels.width,
-                          height: roiPixels.height,
-                          child: Container(
-                            decoration: BoxDecoration(
-                              border: Border.all(color: Colors.blueAccent, width: 3),
-                              color: Colors.white.withOpacity(0.05),
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final size = Size(constraints.maxWidth, constraints.maxHeight);
+                      roiState.updatePreviewSize(size);
+                      final roiPixels = roiState.pixelRectFor(size);
+                      return Stack(
+                        children: [
+                          Container(color: Colors.black),
+                          Positioned(
+                            left: roiPixels.left,
+                            top: roiPixels.top,
+                            width: roiPixels.width,
+                            height: roiPixels.height,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.blueAccent, width: 3),
+                                color: Colors.white.withOpacity(0.05),
+                              ),
                             ),
                           ),
-                        ),
-                        Positioned(
-                          top: 12,
-                          right: 12,
-                          child: Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.6),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'ROI ${roiPixels.width.toStringAsFixed(0)}x${roiPixels.height.toStringAsFixed(0)}',
-                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                                ),
-                                Text(
-                                  'x:${roiPixels.left.toStringAsFixed(0)} y:${roiPixels.top.toStringAsFixed(0)}',
-                                  style: const TextStyle(color: Colors.white70),
-                                ),
-                              ],
+                          Positioned(
+                            top: 12,
+                            right: 12,
+                            child: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withOpacity(0.6),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'ROI ${roiPixels.width.toStringAsFixed(0)}x${roiPixels.height.toStringAsFixed(0)}',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  Text(
+                                    'x:${roiPixels.left.toStringAsFixed(0)} y:${roiPixels.top.toStringAsFixed(0)}',
+                                    style: const TextStyle(color: Colors.white70),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
-                        ),
-                      ],
-                    );
-                  },
+                        ],
+                      );
+                    },
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 12),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: _temperatureLocked ? const Color(0xFFF0FDF4) : const Color(0xFFFFF7ED),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: _temperatureLocked ? const Color(0xFF22C55E) : const Color(0xFFF97316),
-                ),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    _temperatureLocked ? Icons.thermostat : Icons.warning_amber_rounded,
-                    color: _temperatureLocked ? const Color(0xFF16A34A) : const Color(0xFFD97706),
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: _temperatureLocked ? const Color(0xFFF0FDF4) : const Color(0xFFFFF7ED),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: _temperatureLocked ? const Color(0xFF22C55E) : const Color(0xFFF97316),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          _temperatureLocked
-                              ? 'Temperature locked at ${_temperatureValue ?? '--'} °C'
-                              : 'Lock temperature before captures sync to desktop.',
-                          style: const TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                        Text(
-                          _queuedFrames.isEmpty
-                              ? 'Frames go live as soon as you capture.'
-                              : '${_queuedFrames.length} capture(s) queued until temperature is locked and desktop is ready.',
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  ElevatedButton(
-                    onPressed: _promptTemperature,
-                    child: Text(_temperatureLocked ? 'Update Temp' : 'Enter Temp'),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                ElevatedButton.icon(
-                  onPressed: connected && _temperatureLocked ? () => _sendCapture(roiState) : null,
-                  icon: const Icon(Icons.camera_alt_outlined),
-                  label: const Text('Capture Now'),
                 ),
-                OutlinedButton.icon(
-                  onPressed: connected && _temperatureLocked ? () {} : null,
-                  icon: const Icon(Icons.timer),
-                  label: const Text('Start Timed Capture'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: _promptTemperature,
-                  icon: const Icon(Icons.thermostat),
-                  label: const Text('Enter Temperature'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () {},
-                  icon: const Icon(Icons.flag),
-                  label: const Text('Mark Last Capture as Bad'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () {},
-                  icon: const Icon(Icons.note_add_outlined),
-                  label: const Text('Add Note'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            if (_lastSendSummary != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
                 child: Row(
                   children: [
-                    const Icon(Icons.check_circle, color: Colors.green),
-                    const SizedBox(width: 8),
-                    Expanded(child: Text(_lastSendSummary!)),
+                    Icon(
+                      _temperatureLocked ? Icons.thermostat : Icons.warning_amber_rounded,
+                      color: _temperatureLocked ? const Color(0xFF16A34A) : const Color(0xFFD97706),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _temperatureLocked
+                                ? 'Temperature locked at ${_temperatureValue ?? '--'} °C'
+                                : 'Lock temperature before captures sync to desktop.',
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          Text(
+                            _queuedFrames.isEmpty
+                                ? 'Frames go live as soon as you capture.'
+                                : '${_queuedFrames.length} capture(s) queued until temperature is locked and desktop is ready.',
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    ElevatedButton(
+                      onPressed: _promptTemperature,
+                      child: Text(_temperatureLocked ? 'Update Temp' : 'Enter Temp'),
+                    ),
                   ],
                 ),
               ),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF8FAFC),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFE2E8F0)),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
                 children: [
-                  _UploadStat(label: 'Captured', value: widget.status.captured),
-                  _UploadStat(label: 'Pending', value: widget.status.pending),
-                  _UploadStat(label: 'Uploaded', value: widget.status.uploaded),
-                  TextButton(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => UploadQueueScreen(
-                            status: widget.status,
-                            items: const [],
-                          ),
-                        ),
-                      );
-                    },
-                    child: const Text('View Upload Queue'),
+                  ElevatedButton.icon(
+                    onPressed: connected && _temperatureLocked ? () => _sendCapture(roiState) : null,
+                    icon: const Icon(Icons.camera_alt_outlined),
+                    label: const Text('Capture Now'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: connected && _temperatureLocked ? () {} : null,
+                    icon: const Icon(Icons.timer),
+                    label: const Text('Start Timed Capture'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _promptTemperature,
+                    icon: const Icon(Icons.thermostat),
+                    label: const Text('Enter Temperature'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () {},
+                    icon: const Icon(Icons.flag),
+                    label: const Text('Mark Last Capture as Bad'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () {},
+                    icon: const Icon(Icons.note_add_outlined),
+                    label: const Text('Add Note'),
                   ),
                 ],
               ),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () {},
-                    child: const Text('Pause Session'),
+              const SizedBox(height: 12),
+              if (_lastSendSummary != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.check_circle, color: Colors.green),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(_lastSendSummary!)),
+                    ],
                   ),
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => SessionSummaryScreen(status: widget.status),
-                        ),
-                      );
-                    },
-                    child: const Text('End Session'),
-                  ),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFFE2E8F0)),
                 ),
-              ],
-            ),
-          ],
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    _UploadStat(label: 'Captured', value: widget.status.captured),
+                    _UploadStat(label: 'Pending', value: widget.status.pending),
+                    _UploadStat(label: 'Uploaded', value: widget.status.uploaded),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => UploadQueueScreen(
+                              status: widget.status,
+                              items: const [],
+                            ),
+                          ),
+                        );
+                      },
+                      child: const Text('View Upload Queue'),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () {},
+                      child: const Text('Pause Session'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => SessionSummaryScreen(status: widget.status),
+                          ),
+                        );
+                      },
+                      child: const Text('End Session'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
-}
-
 class _UploadStat extends StatelessWidget {
   final String label;
   final int value;
