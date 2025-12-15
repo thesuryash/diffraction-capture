@@ -112,6 +112,9 @@ class ResponsiveRoot extends StatelessWidget {
   const ResponsiveRoot({super.key});
 
   bool _isDesktopLayout(BoxConstraints constraints) {
+    if (!kIsWeb && (Platform.isMacOS || Platform.isWindows || Platform.isLinux)) {
+      return true;
+    }
     return constraints.maxWidth > 900 || kIsWeb;
   }
 
