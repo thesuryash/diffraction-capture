@@ -4098,6 +4098,63 @@ class _PairingCardState extends State<PairingCard> {
     super.dispose();
   }
 
+  void _showFramePreview(BuildContext context, Uint8List bytes, {String? summary}) {
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return Dialog(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 620),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                ClipRRect(
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                  child: Container(
+                    color: const Color(0xFF0B1220),
+                    child: AspectRatio(
+                      aspectRatio: 4 / 3,
+                      child: InteractiveViewer(
+                        child: Image.memory(
+                          bytes,
+                          fit: BoxFit.contain,
+                          gaplessPlayback: true,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                if (summary != null) ...[
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    child: Text(
+                      summary,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF0F172A),
+                      ),
+                    ),
+                  ),
+                ],
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(),
+                      child: const Text('Close'),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<PairingServerState>(
@@ -4236,16 +4293,28 @@ class _PairingCardState extends State<PairingCard> {
               ],
               if (state.lastFrameBytes != null) ...[
                 const SizedBox(height: 8),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: AspectRatio(
-                    aspectRatio: 4 / 3,
-                    child: Image.memory(
-                      state.lastFrameBytes!,
-                      fit: BoxFit.cover,
-                      gaplessPlayback: true,
+                GestureDetector(
+                  onTap: () => _showFramePreview(context, state.lastFrameBytes!,
+                      summary: state.lastFrameSummary),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      color: const Color(0xFF0B1220),
+                      child: AspectRatio(
+                        aspectRatio: 4 / 3,
+                        child: Image.memory(
+                          state.lastFrameBytes!,
+                          fit: BoxFit.contain,
+                          gaplessPlayback: true,
+                        ),
+                      ),
                     ),
                   ),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Tap preview to view full size on this screen.',
+                  style: TextStyle(color: Color(0xFF6B7280), fontSize: 12),
                 ),
               ],
               if (state.lastFrameSummary != null) ...[
