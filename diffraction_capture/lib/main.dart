@@ -2040,6 +2040,7 @@ class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
                         MobileScanner(
                           controller: _cameraController,
                           fit: BoxFit.cover,
+                          onDetect: (_) {},
                         ),
                         Positioned.fill(
                           child: Container(
