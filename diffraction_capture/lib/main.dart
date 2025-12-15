@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
@@ -156,12 +157,157 @@ class DesktopDashboard extends StatefulWidget {
 }
 
 class _DesktopDashboardState extends State<DesktopDashboard> {
+  late List<ProjectData> _projects;
+  late List<SessionData> _sessions;
+  Stats? _stats;
+  ProjectData? _activeProject;
+  final ScrollController _mainScroll = ScrollController();
+
   @override
   void initState() {
     super.initState();
+    _projects = widget.data.projects;
+    _sessions = widget.data.sessions;
+    _stats = widget.data.stats;
+    _activeProject =
+        _projects.firstWhere((p) => p.isActive, orElse: () => _projects.isNotEmpty ? _projects.first : null);
     if (!kIsWeb && (Platform.isMacOS || Platform.isWindows || Platform.isLinux)) {
       PairingHost.instance.ensureStarted();
     }
+  }
+
+  @override
+  void dispose() {
+    _mainScroll.dispose();
+    super.dispose();
+  }
+
+  void _setActiveProject(ProjectData? project) {
+    setState(() {
+      _activeProject = project;
+      _projects = _projects
+          .map(
+            (p) => p.copyWith(isActive: project != null && p.name == project.name),
+          )
+          .toList();
+    });
+  }
+
+  void _showSnack(BuildContext context, String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _createProject(BuildContext context) async {
+    final controller = TextEditingController();
+    final created = await showDialog<ProjectData>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('New Project'),
+          content: TextField(
+            controller: controller,
+            decoration: const InputDecoration(labelText: 'Project name'),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () {
+                if (controller.text.trim().isEmpty) return;
+                Navigator.pop(
+                  ctx,
+                  ProjectData(name: controller.text.trim(), sessions: 0, isActive: true),
+                );
+              },
+              child: const Text('Create'),
+            )
+          ],
+        );
+      },
+    );
+
+    if (created != null) {
+      setState(() {
+        _projects = [
+          created,
+          ..._projects.map((p) => p.copyWith(isActive: false)),
+        ];
+        _activeProject = created;
+      });
+      _showSnack(context, 'Project "${created.name}" created');
+    }
+  }
+
+  void _openSettings(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Settings'),
+        content: const Text('Settings panel coming soon. Pairing and projects are active.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+        ],
+      ),
+    );
+  }
+
+  void _importData(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Import Data'),
+        content: const Text(
+            'Drag a session archive into this window to import. For now this will simulate a successful import.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              setState(() {
+                final extra = SessionData(
+                  title: 'Imported Session ${_sessions.length + 1}',
+                  date: DateTime.now().toIso8601String().split('T').first,
+                  images: 3,
+                  temps: 1,
+                  status: 'Imported',
+                  statusColor: const Color(0xFF22C55E),
+                  icon: Icons.file_upload_outlined,
+                  iconColor: const Color(0xFF8B5CF6),
+                );
+                _sessions = [extra, ..._sessions];
+                _stats = _stats?.copyWith(
+                  sessions: (_stats?.sessions ?? 0) + 1,
+                  images: (_stats?.images ?? 0) + extra.images,
+                );
+              });
+              _showSnack(context, 'Import completed and added to recent sessions');
+            },
+            child: const Text('Simulate Import'),
+          )
+        ],
+      ),
+    );
+  }
+
+  void _connectPhone(BuildContext context) {
+    PairingHost.instance.ensureStarted();
+    _showSnack(context, 'Pairing service ready – scan the QR from within a project.');
+  }
+
+  void _openSession(SessionData session) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(session.title),
+        content: Text('Captured on ${session.date}\n${session.images} images • ${session.temps} temps'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+        ],
+      ),
+    );
+  }
+
+  void _viewAllSessions() {
+    _mainScroll.animateTo(0, duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
   }
 
   @override
@@ -176,19 +322,33 @@ class _DesktopDashboardState extends State<DesktopDashboard> {
               children: [
                 SizedBox(
                   width: 280,
-                  child: _Sidebar(projects: widget.data.projects),
+                  child: _Sidebar(
+                    projects: _projects,
+                    activeProject: _activeProject,
+                    onProjectSelected: _setActiveProject,
+                    pairingCard: PairingCard(activeProject: _activeProject),
+                  ),
                 ),
                 const SizedBox(width: 16),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Header(),
+                      Header(
+                        onNewProject: () => _createProject(context),
+                        onOpenSettings: () => _openSettings(context),
+                      ),
                       const SizedBox(height: 16),
                       Expanded(
                         child: _MainContent(
-                          sessions: widget.data.sessions,
-                          stats: widget.data.stats,
+                          sessions: _sessions,
+                          stats: _stats ?? widget.data.stats,
+                          onNewProject: () => _createProject(context),
+                          onImport: () => _importData(context),
+                          onConnectPhone: () => _connectPhone(context),
+                          onOpenSession: _openSession,
+                          onViewAll: _viewAllSessions,
+                          scrollController: _mainScroll,
                         ),
                       ),
                     ],
@@ -204,7 +364,10 @@ class _DesktopDashboardState extends State<DesktopDashboard> {
 }
 
 class Header extends StatelessWidget {
-  const Header({super.key});
+  final VoidCallback onNewProject;
+  final VoidCallback onOpenSettings;
+
+  const Header({super.key, required this.onNewProject, required this.onOpenSettings});
 
   @override
   Widget build(BuildContext context) {
@@ -250,7 +413,7 @@ class Header extends StatelessWidget {
           ),
           const Spacer(),
           ElevatedButton.icon(
-            onPressed: () {},
+            onPressed: onNewProject,
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFF2563EB),
               foregroundColor: Colors.white,
@@ -265,7 +428,7 @@ class Header extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           IconButton(
-            onPressed: () {},
+            onPressed: onOpenSettings,
             icon: const Icon(Icons.settings_outlined),
             color: const Color(0xFF4B5563),
           )
@@ -278,15 +441,28 @@ class Header extends StatelessWidget {
 class _MainContent extends StatelessWidget {
   final List<SessionData> sessions;
   final Stats stats;
+  final VoidCallback onNewProject;
+  final VoidCallback onImport;
+  final VoidCallback onConnectPhone;
+  final VoidCallback onViewAll;
+  final ValueChanged<SessionData> onOpenSession;
+  final ScrollController scrollController;
 
   const _MainContent({
     required this.sessions,
     required this.stats,
+    required this.onNewProject,
+    required this.onImport,
+    required this.onConnectPhone,
+    required this.onViewAll,
+    required this.onOpenSession,
+    required this.scrollController,
   });
 
   @override
   Widget build(BuildContext context) {
     return SingleChildScrollView(
+      controller: scrollController,
       padding: const EdgeInsets.only(bottom: 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -311,24 +487,27 @@ class _MainContent extends StatelessWidget {
           Wrap(
             spacing: 12,
             runSpacing: 12,
-            children: const [
+            children: [
               _ActionCard(
                 icon: Icons.add_box_outlined,
                 title: 'New Project',
                 subtitle: 'Start a new analysis project',
-                color: Color(0xFF2563EB),
+                color: const Color(0xFF2563EB),
+                onTap: onNewProject,
               ),
               _ActionCard(
                 icon: Icons.smartphone_outlined,
                 title: 'Connect Phone',
                 subtitle: 'Receive live capture data',
-                color: Color(0xFF22C55E),
+                color: const Color(0xFF22C55E),
+                onTap: onConnectPhone,
               ),
               _ActionCard(
                 icon: Icons.file_upload_outlined,
                 title: 'Import Data',
                 subtitle: 'Load existing session files',
-                color: Color(0xFF8B5CF6),
+                color: const Color(0xFF8B5CF6),
+                onTap: onImport,
               ),
             ],
           ),
@@ -348,7 +527,7 @@ class _MainContent extends StatelessWidget {
                     ),
                     const Spacer(),
                     TextButton(
-                      onPressed: () {},
+                      onPressed: onViewAll,
                       child: const Text('View All'),
                     ),
                   ],
@@ -365,6 +544,7 @@ class _MainContent extends StatelessWidget {
                             '${sessions[i].date} • ${sessions[i].images} images • ${sessions[i].temps} temp records',
                         statusLabel: sessions[i].status,
                         statusColor: sessions[i].statusColor,
+                        onOpen: () => onOpenSession(sessions[i]),
                       ),
                       if (i != sessions.length - 1) const Divider(height: 24),
                     ]
@@ -383,8 +563,17 @@ class _MainContent extends StatelessWidget {
 
 class _Sidebar extends StatelessWidget {
   final List<ProjectData> projects;
+  final ProjectData? activeProject;
+  final ValueChanged<ProjectData?> onProjectSelected;
+  final Widget pairingCard;
 
-  const _Sidebar({super.key, required this.projects});
+  const _Sidebar({
+    super.key,
+    required this.projects,
+    required this.activeProject,
+    required this.onProjectSelected,
+    required this.pairingCard,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -409,13 +598,16 @@ class _Sidebar extends StatelessWidget {
                 final isActive = project.isActive;
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 10),
-                  child: _SelectableTile(
-                    title: project.name,
-                    subtitle: '${project.sessions} sessions',
-                    icon: isActive
-                        ? Icons.folder_special
-                        : Icons.folder_outlined,
-                    isSelected: isActive,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: () => onProjectSelected(project),
+                    child: _SelectableTile(
+                      title: project.name,
+                      subtitle: '${project.sessions} sessions',
+                      icon:
+                          isActive ? Icons.folder_special : Icons.folder_outlined,
+                      isSelected: isActive,
+                    ),
                   ),
                 );
               }),
@@ -423,7 +615,7 @@ class _Sidebar extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 10),
-        const PairingCard(),
+        pairingCard,
       ],
     );
   }
@@ -543,55 +735,64 @@ class _ActionCard extends StatelessWidget {
   final String title;
   final String subtitle;
   final Color color;
+  final VoidCallback? onTap;
 
   const _ActionCard({
     required this.icon,
     required this.title,
     required this.subtitle,
     required this.color,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
       width: 310,
-      child: _Card(
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(
-                icon,
-                color: color,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                  ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: _Card(
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  subtitle,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: Color(0xFF6B7280),
-                  ),
+                child: Icon(
+                  icon,
+                  color: color,
                 ),
-              ],
-            )
-          ],
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: Color(0xFF6B7280),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right, color: Color(0xFF9CA3AF)),
+            ],
+          ),
         ),
       ),
     );
@@ -605,6 +806,7 @@ class SessionRow extends StatelessWidget {
   final String meta;
   final String statusLabel;
   final Color statusColor;
+  final VoidCallback? onOpen;
 
   const SessionRow({
     super.key,
@@ -614,6 +816,7 @@ class SessionRow extends StatelessWidget {
     required this.meta,
     required this.statusLabel,
     required this.statusColor,
+    this.onOpen,
   });
 
   @override
@@ -658,7 +861,7 @@ class SessionRow extends StatelessWidget {
         ),
         const SizedBox(width: 8),
         IconButton(
-          onPressed: () {},
+          onPressed: onOpen,
           icon: const Icon(Icons.chevron_right),
           color: const Color(0xFF9CA3AF),
         ),
@@ -2373,6 +2576,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
   Future<void> _sendCapture(RoiState roiState) async {
     final size = roiState.previewSize ?? const Size(1080, 1920);
     final roiPixels = roiState.pixelRectFor(size);
+    final frameBytes = await _buildRoiPreview(size, roiPixels);
     final payload = {
       'type': 'frame',
       'session': widget.sessionName,
@@ -2392,9 +2596,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
         },
         'previewSize': {'width': size.width, 'height': size.height},
       },
-      'frame': base64Encode(
-        utf8.encode('roi-demo-${DateTime.now().millisecondsSinceEpoch}'),
-      ),
+      'frame': base64Encode(frameBytes),
     };
 
     try {
@@ -2413,6 +2615,49 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
         SnackBar(content: Text('Failed to send capture: $e')),
       );
     }
+  }
+
+  Future<Uint8List> _buildRoiPreview(Size size, Rect roiPixels) async {
+    final recorder = PictureRecorder();
+    final canvas = Canvas(recorder);
+    final width = max(1, size.width.round());
+    final height = max(1, size.height.round());
+
+    final gradient = const LinearGradient(
+      colors: [Color(0xFF0EA5E9), Color(0xFF1D4ED8)],
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+    ).createShader(Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()));
+
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
+      Paint()..shader = gradient,
+    );
+    canvas.drawRect(
+      roiPixels,
+      Paint()..color = Colors.white.withOpacity(0.2),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(roiPixels, const Radius.circular(8)),
+      Paint()
+        ..color = Colors.white.withOpacity(0.4)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4,
+    );
+
+    final label = TextPainter(
+      text: TextSpan(
+        text:
+            '${roiPixels.width.toStringAsFixed(0)} x ${roiPixels.height.toStringAsFixed(0)} @ (${roiPixels.left.toStringAsFixed(0)}, ${roiPixels.top.toStringAsFixed(0)})',
+        style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: width - 24);
+    label.paint(canvas, Offset(12, 12));
+
+    final image = await recorder.endRecording().toImage(width, height);
+    final data = await image.toByteData(format: ImageByteFormat.png);
+    return data?.buffer.asUint8List() ?? Uint8List(0);
   }
 
   @override
@@ -2981,6 +3226,14 @@ class ProjectData {
       isActive: (json['active'] as bool?) ?? false,
     );
   }
+
+  ProjectData copyWith({String? name, int? sessions, bool? isActive}) {
+    return ProjectData(
+      name: name ?? this.name,
+      sessions: sessions ?? this.sessions,
+      isActive: isActive ?? this.isActive,
+    );
+  }
 }
 
 class SessionData {
@@ -3094,6 +3347,15 @@ class Stats {
       temps: (json['temps'] as num?)?.toInt() ?? 0,
     );
   }
+
+  Stats copyWith({int? projects, int? sessions, int? images, int? temps}) {
+    return Stats(
+      projects: projects ?? this.projects,
+      sessions: sessions ?? this.sessions,
+      images: images ?? this.images,
+      temps: temps ?? this.temps,
+    );
+  }
 }
 
 Color _hexToColor(String hex) {
@@ -3130,21 +3392,45 @@ Color _badgeColor(String badge) {
 }
 
 class PairingCard extends StatelessWidget {
-  const PairingCard({super.key});
+  final ProjectData? activeProject;
+
+  const PairingCard({super.key, required this.activeProject});
 
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<PairingServerState>(
       valueListenable: PairingHost.instance.state,
       builder: (context, state, _) {
+        if (activeProject == null) {
+          return _Card(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text(
+                  'Phone Connection',
+                  style: TextStyle(
+                    color: Color(0xFF6B7280),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                SizedBox(height: 8),
+                Text(
+                  'Select a project to unlock pairing and QR codes.',
+                  style: TextStyle(color: Color(0xFF6B7280)),
+                ),
+              ],
+            ),
+          );
+        }
+
         final connected = state.connected;
         return _Card(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'Phone Connection',
-                style: TextStyle(
+              Text(
+                'Phone Connection • ${activeProject!.name}',
+                style: const TextStyle(
                   color: Color(0xFF6B7280),
                   fontWeight: FontWeight.w600,
                 ),
@@ -3200,9 +3486,49 @@ class PairingCard extends StatelessWidget {
               ),
               if (state.lastMessage != null) ...[
                 const SizedBox(height: 6),
+                const Text(
+                  'Last message:',
+                  style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF4B5563)),
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  constraints: const BoxConstraints(maxHeight: 120),
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF3F4F6),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                  ),
+                  child: Scrollbar(
+                    thumbVisibility: true,
+                    child: SingleChildScrollView(
+                      child: Text(
+                        state.lastMessage ?? '',
+                        style: const TextStyle(color: Color(0xFF6B7280)),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+              if (state.lastFrameBytes != null) ...[
+                const SizedBox(height: 8),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: AspectRatio(
+                    aspectRatio: 4 / 3,
+                    child: Image.memory(
+                      state.lastFrameBytes!,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                    ),
+                  ),
+                ),
+              ],
+              if (state.lastFrameSummary != null) ...[
+                const SizedBox(height: 6),
                 Text(
-                  'Last message: ${state.lastMessage}',
-                  style: const TextStyle(color: Color(0xFF6B7280)),
+                  'Last ROI frame: ${state.lastFrameSummary}',
+                  style: const TextStyle(color: Color(0xFF0F172A), fontWeight: FontWeight.w600),
                 ),
               ],
               if (state.lastFrameSummary != null) ...[
@@ -3228,6 +3554,7 @@ class PairingServerState {
   final String displayHost;
   final String? lastMessage;
   final String? lastFrameSummary;
+  final Uint8List? lastFrameBytes;
 
   const PairingServerState({
     required this.running,
@@ -3237,6 +3564,7 @@ class PairingServerState {
     required this.displayHost,
     required this.lastMessage,
     required this.lastFrameSummary,
+    required this.lastFrameBytes,
   });
 
   PairingServerState copyWith({
@@ -3247,6 +3575,7 @@ class PairingServerState {
     String? displayHost,
     String? lastMessage,
     String? lastFrameSummary,
+    Uint8List? lastFrameBytes,
   }) {
     return PairingServerState(
       running: running ?? this.running,
@@ -3256,6 +3585,7 @@ class PairingServerState {
       displayHost: displayHost ?? this.displayHost,
       lastMessage: lastMessage ?? this.lastMessage,
       lastFrameSummary: lastFrameSummary ?? this.lastFrameSummary,
+      lastFrameBytes: lastFrameBytes ?? this.lastFrameBytes,
     );
   }
 }
@@ -3273,6 +3603,7 @@ class PairingHost {
     displayHost: '',
     lastMessage: null,
     lastFrameSummary: null,
+    lastFrameBytes: null,
   ));
 
   HttpServer? _server;
@@ -3338,13 +3669,24 @@ class PairingHost {
           if (payload is Map && payload['type'] == 'frame') {
             final roi = payload['roi'] as Map?;
             final pixels = roi?['pixels'] as Map?;
+            Uint8List? frameBytes;
+            final frameStr = payload['frame'];
+            if (frameStr is String) {
+              try {
+                frameBytes = base64Decode(frameStr);
+              } catch (_) {}
+            }
             final summary = pixels != null
                 ? 'ROI ${_fmtNum(pixels['width'])}x${_fmtNum(pixels['height'])} at (${_fmtNum(pixels['x'])}, ${_fmtNum(pixels['y'])})'
                 : 'ROI frame received';
             state.value = state.value.copyWith(
               lastMessage: raw,
               lastFrameSummary: summary,
+              lastFrameBytes: frameBytes ?? state.value.lastFrameBytes,
             );
+            if (frameBytes != null) {
+              _forwardForAnalysis(frameBytes);
+            }
             return;
           }
         } catch (_) {}
@@ -3363,6 +3705,12 @@ class PairingHost {
       request.response.statusCode = HttpStatus.badRequest;
       await request.response.close();
     }
+  }
+
+  void _forwardForAnalysis(Uint8List bytes) {
+    // Placeholder for downstream analysis module integration.
+    // Frames are made available through the state notifier and can be
+    // consumed by future processing pipelines.
   }
 
   String _randomToken() {
