@@ -2640,6 +2640,8 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
     final size = roiState.previewSize ?? const Size(1080, 1920);
     final roiPixels = roiState.pixelRectFor(size);
     final frameBytes = await _buildRoiPreview(size, roiPixels);
+    if (!mounted) return;
+
     final payload = {
       'type': 'frame',
       'session': widget.sessionName,
@@ -2667,6 +2669,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
     final connected = widget.pairingChannel != null;
 
     if (!_temperatureLocked || !connected) {
+      if (!mounted) return;
       setState(() {
         _queuedFrames.add(payload);
         _isSending = false;
@@ -2687,9 +2690,8 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
     }
 
     await _sendCaptureToDesktop(payload, roiPixels: roiPixels);
-    if (mounted) {
-      setState(() => _isSending = false);
-    }
+    if (!mounted) return;
+    setState(() => _isSending = false);
   }
 
   void _flushQueue() {
@@ -2753,6 +2755,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
       context,
       MaterialPageRoute(builder: (_) => TemperatureEntryScreen()),
     );
+    if (!mounted) return;
     if (entered == null || entered.trim().isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -3259,13 +3262,15 @@ class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
     if (!_running) return;
     if (_secondsRemaining <= 1) {
       await _triggerCapture();
+      if (!mounted) return;
       return;
     }
+    if (!mounted) return;
     setState(() => _secondsRemaining -= 1);
   }
 
   Future<void> _triggerCapture() async {
-    if (_captureInFlight) return;
+    if (_captureInFlight || !mounted) return;
     setState(() {
       _captureInFlight = true;
       _secondsRemaining = widget.interval.inSeconds;
@@ -3273,9 +3278,8 @@ class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
     try {
       await widget.onCapture();
     } finally {
-      if (mounted) {
-        setState(() => _captureInFlight = false);
-      }
+      if (!mounted) return;
+      setState(() => _captureInFlight = false);
     }
   }
 
@@ -3417,10 +3421,16 @@ class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
                           label: const Text('Capture now'),
                         ),
                         const SizedBox(width: 12),
-                        OutlinedButton.icon(
-                          onPressed: _toggleRunning,
-                          icon: Icon(_running ? Icons.pause : Icons.play_arrow),
-                          label: Text(_running ? 'Pause countdown' : 'Resume countdown'),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _toggleRunning,
+                            icon: Icon(_running ? Icons.pause : Icons.play_arrow),
+                            label: Text(
+                              _running ? 'Pause countdown' : 'Resume countdown',
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                            ),
+                          ),
                         ),
                       ],
                     ),
