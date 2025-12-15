@@ -2799,7 +2799,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
     if (_monitorOpen) return;
     if (!mounted) return;
 
-    final nav = Navigator.of(context);
+    final nav = Navigator.of(context, rootNavigator: true);
     final messenger = ScaffoldMessenger.of(context);
     _monitorOpen = true;
     showDialog(
