@@ -2928,49 +2928,72 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                         roiState.updatePreviewSize(size);
                       });
                       final roiPixels = roiState.pixelRectFor(size);
-                      return Stack(
-                        children: [
-                          Container(color: Colors.black),
-                          Positioned(
-                            left: roiPixels.left,
-                            top: roiPixels.top,
-                            width: roiPixels.width,
-                            height: roiPixels.height,
-                            child: Container(
-                              decoration: BoxDecoration(
-                                border: Border.all(color: Colors.blueAccent, width: 3),
-                                color: Colors.white.withOpacity(0.05),
-                              ),
-                            ),
-                          ),
-                          Positioned(
-                            top: 12,
-                            right: 12,
-                            child: Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withOpacity(0.6),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'ROI ${roiPixels.width.toStringAsFixed(0)}x${roiPixels.height.toStringAsFixed(0)}',
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.bold,
+                      return ValueListenableBuilder<PairingServerState>(
+                        valueListenable: PairingHost.instance.state,
+                        builder: (context, pairingState, _) {
+                          final background = pairingState.lastFrameBytes != null
+                              ? Image.memory(
+                                  pairingState.lastFrameBytes!,
+                                  fit: BoxFit.cover,
+                                  gaplessPlayback: true,
+                                  width: size.width,
+                                  height: size.height,
+                                )
+                              : Container(
+                                  decoration: const BoxDecoration(
+                                    gradient: LinearGradient(
+                                      colors: [Color(0xFF0EA5E9), Color(0xFF1D4ED8)],
+                                      begin: Alignment.topLeft,
+                                      end: Alignment.bottomRight,
                                     ),
                                   ),
-                                  Text(
-                                    'x:${roiPixels.left.toStringAsFixed(0)} y:${roiPixels.top.toStringAsFixed(0)}',
-                                    style: const TextStyle(color: Colors.white70),
+                                );
+
+                          return Stack(
+                            children: [
+                              Positioned.fill(child: background),
+                              Positioned(
+                                left: roiPixels.left,
+                                top: roiPixels.top,
+                                width: roiPixels.width,
+                                height: roiPixels.height,
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    border: Border.all(color: Colors.blueAccent, width: 3),
+                                    color: Colors.white.withOpacity(0.05),
                                   ),
-                                ],
+                                ),
                               ),
-                            ),
-                          ),
-                        ],
+                              Positioned(
+                                top: 12,
+                                right: 12,
+                                child: Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withOpacity(0.6),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'ROI ${roiPixels.width.toStringAsFixed(0)}x${roiPixels.height.toStringAsFixed(0)}',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                      Text(
+                                        'x:${roiPixels.left.toStringAsFixed(0)} y:${roiPixels.top.toStringAsFixed(0)}',
+                                        style: const TextStyle(color: Colors.white70),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
                       );
                     },
                   ),
