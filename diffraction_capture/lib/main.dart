@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:ui';
+import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
@@ -2815,6 +2816,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
       'type': 'frame',
       'session': widget.sessionName,
       'timestamp': DateTime.now().toIso8601String(),
+      'temperature': _temperatureValue,
       'roi': {
         'normalized': {
           'left': roiState.normalizedRect.left,
@@ -2833,7 +2835,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
       'frame': base64Encode(frameBytes),
     };
 
-    _recordCapture(frameBytes, roiPixels);
+    await _recordCapture(frameBytes, roiPixels);
 
     final connected = widget.pairingChannel != null;
 
@@ -2866,6 +2868,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
   void _flushQueue() {
     if (widget.pairingChannel == null || !_temperatureLocked) return;
     for (final payload in List<Map<String, dynamic>>.from(_queuedFrames)) {
+      payload['temperature'] ??= _temperatureValue;
       _sendCaptureToDesktop(payload);
     }
     setState(() => _queuedFrames.clear());
@@ -2995,6 +2998,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
       _temperatureLocked = true;
       _temperatureValue = entered.trim();
     });
+    _backfillCaptureTemperatures(_temperatureValue!);
     _updateMonitorStatus();
     if (widget.pairingChannel != null) {
       widget.pairingChannel?.sink.add(
@@ -3008,18 +3012,37 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
     _flushQueue();
   }
 
-  void _recordCapture(Uint8List bytes, Rect roi) {
+  Future<void> _recordCapture(Uint8List bytes, Rect roi) async {
+    final fringeWidth = await _estimateFringeWidthFromImage(bytes);
     final updated = [
       _CapturedPhoto(
         bytes: bytes,
         createdAt: DateTime.now(),
         summary:
             '${roi.width.toStringAsFixed(0)}x${roi.height.toStringAsFixed(0)} @ (${roi.left.toStringAsFixed(0)}, ${roi.top.toStringAsFixed(0)})',
+        temperature: _temperatureValue,
+        fringeWidthPx: fringeWidth,
       ),
       ..._capturedPhotos.value,
     ];
     _capturedPhotos.value = updated.take(12).toList();
     _updateMonitorStatus();
+  }
+
+  void _backfillCaptureTemperatures(String value) {
+    _capturedPhotos.value = _capturedPhotos.value
+        .map(
+          (photo) => photo.temperature != null
+              ? photo
+              : _CapturedPhoto(
+                  bytes: photo.bytes,
+                  createdAt: photo.createdAt,
+                  summary: photo.summary,
+                  temperature: value,
+                  fringeWidthPx: photo.fringeWidthPx,
+                ),
+        )
+        .toList();
   }
 
   void _openTimedCaptureWindow(RoiState roiState) {
@@ -3472,11 +3495,15 @@ class _CapturedPhoto {
   final Uint8List bytes;
   final DateTime createdAt;
   final String summary;
+  final String? temperature;
+  final double? fringeWidthPx;
 
   const _CapturedPhoto({
     required this.bytes,
     required this.createdAt,
     required this.summary,
+    this.temperature,
+    this.fringeWidthPx,
   });
 
   String get timestampLabel {
@@ -3486,6 +3513,11 @@ class _CapturedPhoto {
     final second = time.second.toString().padLeft(2, '0');
     return '$hour:$minute:$second';
   }
+
+  String get temperatureLabel => temperature ?? '--';
+
+  String get fringeWidthLabel =>
+      fringeWidthPx != null ? '${fringeWidthPx!.toStringAsFixed(1)} px' : '--';
 }
 
 class _MonitorStatus {
@@ -3634,7 +3666,7 @@ class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
     return Dialog(
       insetPadding: const EdgeInsets.all(24),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 520),
+        constraints: const BoxConstraints(maxWidth: 820, maxHeight: 680),
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(
@@ -3789,55 +3821,94 @@ class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
                         child: Text('No photos captured yet.'),
                       );
                     }
-                    return ListView.separated(
-                      itemCount: items.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 10),
-                      itemBuilder: (context, index) {
-                        final photo = items[index];
-                        return Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF8FAFC),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: const Color(0xFFE2E8F0)),
-                          ),
-                          child: Row(
-                            children: [
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(10),
-                                child: Image.memory(
-                                  photo.bytes,
-                                  width: 72,
-                                  height: 72,
-                                  fit: BoxFit.cover,
+                    return Scrollbar(
+                      thumbVisibility: true,
+                      child: ListView.separated(
+                        itemCount: items.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        itemBuilder: (context, index) {
+                          final photo = items[index];
+                          return Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF8FAFC),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: const Color(0xFFE2E8F0)),
+                            ),
+                            child: Row(
+                              children: [
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: Image.memory(
+                                    photo.bytes,
+                                    width: 180,
+                                    height: 180,
+                                    fit: BoxFit.cover,
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'Captured at ${photo.timestampLabel}',
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 15,
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Captured at ${photo.timestampLabel}',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 16,
+                                        ),
                                       ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      photo.summary,
-                                      style: const TextStyle(
-                                        color: Color(0xFF475569),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        photo.summary,
+                                        style: const TextStyle(
+                                          color: Color(0xFF475569),
+                                        ),
                                       ),
-                                    ),
-                                  ],
+                                      const SizedBox(height: 6),
+                                      Row(
+                                        children: [
+                                          const Icon(
+                                            Icons.thermostat_outlined,
+                                            size: 18,
+                                            color: Color(0xFF2563EB),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            '${photo.temperatureLabel} °C',
+                                            style: const TextStyle(
+                                              color: Color(0xFF0F172A),
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Row(
+                                        children: [
+                                          const Icon(
+                                            Icons.grain_outlined,
+                                            size: 18,
+                                            color: Color(0xFF2563EB),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            'Fringe ≈ ${photo.fringeWidthLabel}',
+                                            style: const TextStyle(
+                                              color: Color(0xFF0F172A),
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
                                 ),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
+                              ],
+                            ),
+                          );
+                        },
+                      ),
                     );
                   },
                 ),
@@ -4389,6 +4460,73 @@ Color _badgeColor(String badge) {
   }
 }
 
+Future<double?> _estimateFringeWidthFromImage(Uint8List bytes) async {
+  try {
+    final codec = await instantiateImageCodec(bytes);
+    final frame = await codec.getNextFrame();
+    final image = frame.image;
+    final byteData = await image.toByteData(format: ImageByteFormat.rawRgba);
+    if (byteData == null) return null;
+
+    final width = image.width;
+    final height = image.height;
+    if (width < 8 || height < 8) return null;
+
+    final bandTop = max(0, height ~/ 2 - 2);
+    final bandBottom = min(height - 1, height ~/ 2 + 2);
+    final bandHeight = bandBottom - bandTop + 1;
+
+    final data = byteData.buffer.asUint8List();
+    final intensities = List<double>.filled(width, 0);
+    for (int y = bandTop; y <= bandBottom; y++) {
+      final rowStart = y * width * 4;
+      for (int x = 0; x < width; x++) {
+        final pixelIndex = rowStart + x * 4;
+        final r = data[pixelIndex];
+        final g = data[pixelIndex + 1];
+        final b = data[pixelIndex + 2];
+        intensities[x] += 0.299 * r + 0.587 * g + 0.114 * b;
+      }
+    }
+
+    for (int i = 0; i < intensities.length; i++) {
+      intensities[i] /= bandHeight;
+    }
+
+    final minVal = intensities.reduce(min);
+    final maxVal = intensities.reduce(max);
+    if (maxVal - minVal < 1) return null;
+
+    final threshold = minVal + (maxVal - minVal) * 0.35;
+    final List<int> peaks = [];
+    for (int i = 1; i < intensities.length - 1; i++) {
+      final value = intensities[i];
+      if (value >= intensities[i - 1] &&
+          value >= intensities[i + 1] &&
+          value >= threshold) {
+        if (peaks.isEmpty || i - peaks.last > 2) {
+          peaks.add(i);
+        }
+      }
+    }
+
+    if (peaks.length < 2) return null;
+
+    final List<double> spacings = [];
+    for (int i = 1; i < peaks.length; i++) {
+      final gap = (peaks[i] - peaks[i - 1]).toDouble();
+      if (gap > 2) spacings.add(gap);
+    }
+
+    if (spacings.isEmpty) return null;
+    final average =
+        spacings.reduce((value, element) => value + element) / spacings.length;
+    return average;
+  } catch (_) {
+    return null;
+  }
+}
+
 class PairingCard extends StatefulWidget {
   final ProjectData? activeProject;
 
@@ -4399,11 +4537,8 @@ class PairingCard extends StatefulWidget {
 }
 
 class _PairingCardState extends State<PairingCard> {
-  final ScrollController _messageScrollController = ScrollController();
-
   @override
   void dispose() {
-    _messageScrollController.dispose();
     super.dispose();
   }
 
@@ -4478,6 +4613,15 @@ class _PairingCardState extends State<PairingCard> {
     PairingServerState state,
   ) async {
     final scrollController = ScrollController();
+    final Map<String, List<_CapturedPhoto>> photosByTemperature = {};
+    for (final photo in state.recentFrames) {
+      final key = photo.temperatureLabel;
+      photosByTemperature.putIfAbsent(key, () => []).add(photo);
+    }
+    final temperatureKeys = photosByTemperature.keys.toList();
+    final galleryControllers = {
+      for (final temp in temperatureKeys) temp: ScrollController(),
+    };
 
     await showDialog(
       context: context,
@@ -4600,41 +4744,6 @@ class _PairingCardState extends State<PairingCard> {
                                         ],
                                       ),
                                     ),
-                                  if (state.lastMessage != null)
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 10),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          const Text(
-                                            'Last message',
-                                            style: TextStyle(
-                                              fontWeight: FontWeight.w700,
-                                              color: Color(0xFF4B5563),
-                                            ),
-                                          ),
-                                          const SizedBox(height: 6),
-                                          Container(
-                                            padding: const EdgeInsets.all(10),
-                                            decoration: BoxDecoration(
-                                              color: const Color(0xFFF3F4F6),
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                              border: Border.all(
-                                                color: const Color(0xFFE5E7EB),
-                                              ),
-                                            ),
-                                            child: Text(
-                                              state.lastMessage!,
-                                              style: const TextStyle(
-                                                color: Color(0xFF6B7280),
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
                                   if (state.lastFrameSummary != null)
                                     Padding(
                                       padding: const EdgeInsets.only(top: 12),
@@ -4654,67 +4763,224 @@ class _PairingCardState extends State<PairingCard> {
                         const SizedBox(width: 16),
                         Expanded(
                           flex: 7,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Expanded(
-                                child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(16),
-                                  child: Container(
-                                    decoration: const BoxDecoration(
-                                      gradient: LinearGradient(
-                                        colors: [
-                                          Color(0xFF0EA5E9),
-                                          Color(0xFF1D4ED8),
-                                        ],
-                                        begin: Alignment.topLeft,
-                                        end: Alignment.bottomRight,
+                          child: Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: const Color(0xFFE5E7EB)),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: const [
+                                    Icon(
+                                      Icons.photo_library_outlined,
+                                      color: Color(0xFF2563EB),
+                                    ),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      'Captured photos',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: 16,
                                       ),
                                     ),
-                                    child: AspectRatio(
-                                      aspectRatio: 4 / 3,
-                                      child: state.lastFrameBytes != null
-                                          ? InteractiveViewer(
-                                              child: Image.memory(
-                                                state.lastFrameBytes!,
-                                                fit: BoxFit.contain,
-                                                gaplessPlayback: true,
+                                  ],
+                                ),
+                                const SizedBox(height: 10),
+                                Expanded(
+                                  child: state.recentFrames.isEmpty
+                                      ? const Center(
+                                          child:
+                                              Text('No photos received yet.'),
+                                        )
+                                      : DefaultTabController(
+                                          length: temperatureKeys.length,
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              TabBar(
+                                                isScrollable: true,
+                                                labelColor: const Color(0xFF2563EB),
+                                                unselectedLabelColor:
+                                                    const Color(0xFF6B7280),
+                                                indicatorColor:
+                                                    const Color(0xFF2563EB),
+                                                tabs: [
+                                                  for (final temp in temperatureKeys)
+                                                    Tab(
+                                                      text: temp == '--'
+                                                          ? 'No temp'
+                                                          : '$temp °C',
+                                                    ),
+                                                ],
                                               ),
-                                            )
-                                          : const Center(
-                                              child: Text(
-                                                'No ROI frame received yet',
-                                                style: TextStyle(
-                                                  color: Colors.white,
-                                                  fontWeight: FontWeight.w700,
+                                              const SizedBox(height: 10),
+                                              Expanded(
+                                                child: TabBarView(
+                                                  children: [
+                                                    for (final temp
+                                                        in temperatureKeys)
+                                                      Scrollbar(
+                                                        controller:
+                                                            galleryControllers[temp],
+                                                        thumbVisibility: true,
+                                                        child: ListView.separated(
+                                                          controller:
+                                                              galleryControllers[temp],
+                                                          itemCount:
+                                                              photosByTemperature[temp]!
+                                                                  .length,
+                                                          separatorBuilder: (_, __) =>
+                                                              const SizedBox(
+                                                                  height: 10),
+                                                          itemBuilder:
+                                                              (context, index) {
+                                                            final photo =
+                                                                photosByTemperature[temp]![
+                                                                    index];
+                                                            return GestureDetector(
+                                                              onTap: () =>
+                                                                  _showFramePreview(
+                                                                context,
+                                                                photo.bytes,
+                                                                summary:
+                                                                    photo.summary,
+                                                              ),
+                                                              child: Container(
+                                                                padding:
+                                                                    const EdgeInsets
+                                                                        .all(10),
+                                                                decoration:
+                                                                    BoxDecoration(
+                                                                  color: const Color(
+                                                                      0xFFF9FAFB),
+                                                                  borderRadius:
+                                                                      BorderRadius
+                                                                          .circular(
+                                                                              12),
+                                                                  border: Border.all(
+                                                                    color: const Color(
+                                                                        0xFFE5E7EB),
+                                                                  ),
+                                                                ),
+                                                                child: Row(
+                                                                  children: [
+                                                                    ClipRRect(
+                                                                      borderRadius:
+                                                                          BorderRadius
+                                                                              .circular(
+                                                                                  10),
+                                                                      child: Image
+                                                                          .memory(
+                                                                        photo
+                                                                            .bytes,
+                                                                        width:
+                                                                            140,
+                                                                        height:
+                                                                            120,
+                                                                        fit: BoxFit
+                                                                            .cover,
+                                                                      ),
+                                                                    ),
+                                                                    const SizedBox(
+                                                                        width: 12),
+                                                                    Expanded(
+                                                                      child:
+                                                                          Column(
+                                                                        crossAxisAlignment:
+                                                                            CrossAxisAlignment
+                                                                                .start,
+                                                                        children: [
+                                                                          Text(
+                                                                            'Captured at ${photo.timestampLabel}',
+                                                                            style:
+                                                                                const TextStyle(
+                                                                              fontWeight:
+                                                                                  FontWeight.w700,
+                                                                            ),
+                                                                          ),
+                                                                          const SizedBox(
+                                                                              height:
+                                                                                  6),
+                                                                          Text(
+                                                                            photo
+                                                                                .summary,
+                                                                            style:
+                                                                                const TextStyle(
+                                                                              color:
+                                                                                  Color(0xFF475569),
+                                                                            ),
+                                                                          ),
+                                                                          const SizedBox(
+                                                                              height:
+                                                                                  6),
+                                                                          Row(
+                                                                            children: [
+                                                                              const Icon(
+                                                                                Icons
+                                                                                    .thermostat_outlined,
+                                                                                size:
+                                                                                    18,
+                                                                                color:
+                                                                                    Color(0xFF2563EB),
+                                                                              ),
+                                                                              const SizedBox(
+                                                                                  width:
+                                                                                      6),
+                                                                              Text(
+                                                                                '${photo.temperatureLabel} °C',
+                                                                                style:
+                                                                                    const TextStyle(
+                                                                                  color:
+                                                                                      Color(0xFF0F172A),
+                                                                                  fontWeight:
+                                                                                      FontWeight.w600,
+                                                                                ),
+                                                                              ),
+                                                                            ],
+                                                                          ),
+                                                                          const SizedBox(height: 6),
+                                                                          Row(
+                                                                            children: [
+                                                                              const Icon(
+                                                                                Icons.grain_outlined,
+                                                                                size: 18,
+                                                                                color:
+                                                                                    Color(0xFF2563EB),
+                                                                              ),
+                                                                              const SizedBox(width: 6),
+                                                                              Text(
+                                                                                'Fringe ≈ ${photo.fringeWidthLabel}',
+                                                                                style: const TextStyle(
+                                                                                  color: Color(0xFF0F172A),
+                                                                                  fontWeight: FontWeight.w600,
+                                                                                ),
+                                                                              ),
+                                                                            ],
+                                                                          ),
+                                                                        ],
+                                                                      ),
+                                                                    ),
+                                                                  ],
+                                                                ),
+                                                              ),
+                                                            );
+                                                          },
+                                                        ),
+                                                      ),
+                                                  ],
                                                 ),
                                               ),
-                                            ),
-                                    ),
-                                  ),
+                                            ],
+                                          ),
+                                        ),
                                 ),
-                              ),
-                              const SizedBox(height: 10),
-                              Row(
-                                children: [
-                                  const Icon(
-                                    Icons.open_in_full,
-                                    color: Color(0xFF6B7280),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      state.lastFrameBytes != null
-                                          ? 'Use pinch or mouse wheel to inspect the latest ROI image.'
-                                          : 'Waiting for the first ROI image from the handset.',
-                                      style: const TextStyle(
-                                        color: Color(0xFF6B7280),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
                       ],
@@ -4729,6 +4995,9 @@ class _PairingCardState extends State<PairingCard> {
     );
 
     scrollController.dispose();
+    for (final controller in galleryControllers.values) {
+      controller.dispose();
+    }
   }
 
   @override
@@ -4850,64 +5119,11 @@ class _PairingCardState extends State<PairingCard> {
                   ],
                 ),
               ],
-              if (state.lastMessage != null) ...[
-                const SizedBox(height: 6),
-                const Text(
-                  'Last message:',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF4B5563),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Container(
-                  constraints: const BoxConstraints(maxHeight: 120),
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF3F4F6),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: const Color(0xFFE5E7EB)),
-                  ),
-                  child: Scrollbar(
-                    controller: _messageScrollController,
-                    thumbVisibility: true,
-                    child: SingleChildScrollView(
-                      controller: _messageScrollController,
-                      child: Text(
-                        state.lastMessage ?? '',
-                        style: const TextStyle(color: Color(0xFF6B7280)),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-              if (state.lastFrameBytes != null) ...[
+              if (state.recentFrames.isNotEmpty) ...[
                 const SizedBox(height: 8),
-                GestureDetector(
-                  onTap: () => _showFramePreview(
-                    context,
-                    state.lastFrameBytes!,
-                    summary: state.lastFrameSummary,
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: Container(
-                      color: const Color(0xFF0B1220),
-                      child: AspectRatio(
-                        aspectRatio: 4 / 3,
-                        child: Image.memory(
-                          state.lastFrameBytes!,
-                          fit: BoxFit.contain,
-                          gaplessPlayback: true,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 6),
-                const Text(
-                  'Tap preview to view full size on this screen.',
-                  style: TextStyle(color: Color(0xFF6B7280), fontSize: 12),
+                Text(
+                  '${state.recentFrames.length} photo(s) received. Open the project window to review them.',
+                  style: const TextStyle(color: Color(0xFF4B5563)),
                 ),
               ],
               if (state.lastFrameSummary != null) ...[
@@ -4953,6 +5169,7 @@ class PairingServerState {
   final String status;
   final String? qrData;
   final String displayHost;
+  final List<_CapturedPhoto> recentFrames;
   final String? lastMessage;
   final String? lastFrameSummary;
   final Uint8List? lastFrameBytes;
@@ -4965,6 +5182,7 @@ class PairingServerState {
     required this.status,
     required this.qrData,
     required this.displayHost,
+    required this.recentFrames,
     required this.lastMessage,
     required this.lastFrameSummary,
     required this.lastFrameBytes,
@@ -4978,6 +5196,7 @@ class PairingServerState {
     String? status,
     String? qrData,
     String? displayHost,
+    List<_CapturedPhoto>? recentFrames,
     String? lastMessage,
     String? lastFrameSummary,
     Uint8List? lastFrameBytes,
@@ -4990,6 +5209,7 @@ class PairingServerState {
       status: status ?? this.status,
       qrData: qrData ?? this.qrData,
       displayHost: displayHost ?? this.displayHost,
+      recentFrames: recentFrames ?? this.recentFrames,
       lastMessage: lastMessage ?? this.lastMessage,
       lastFrameSummary: lastFrameSummary ?? this.lastFrameSummary,
       lastFrameBytes: lastFrameBytes ?? this.lastFrameBytes,
@@ -5011,6 +5231,7 @@ class PairingHost {
           status: 'Not started',
           qrData: null,
           displayHost: '',
+          recentFrames: [],
           lastMessage: null,
           lastFrameSummary: null,
           lastFrameBytes: null,
@@ -5069,6 +5290,7 @@ class PairingHost {
           try {
             final payload = jsonDecode(raw ?? '');
             if (payload is Map && payload['type'] == 'frame') {
+              final temperature = payload['temperature']?.toString();
               final roi = payload['roi'] as Map?;
               final pixels = roi?['pixels'] as Map?;
               Uint8List? frameBytes;
@@ -5081,10 +5303,33 @@ class PairingHost {
               final summary = pixels != null
                   ? 'ROI ${_fmtNum(pixels['width'])}x${_fmtNum(pixels['height'])} at (${_fmtNum(pixels['x'])}, ${_fmtNum(pixels['y'])})'
                   : 'ROI frame received';
+              final fringeWidth = frameBytes != null
+                  ? await _estimateFringeWidthFromImage(frameBytes)
+                  : null;
+              final detailedSummary = fringeWidth != null
+                  ? '$summary • Fringe ≈ ${fringeWidth.toStringAsFixed(1)} px'
+                  : summary;
+              var frames = state.value.recentFrames;
+              if (frameBytes != null) {
+                frames = [
+                  _CapturedPhoto(
+                    bytes: frameBytes,
+                    createdAt: DateTime.now(),
+                    summary: detailedSummary,
+                    temperature: temperature,
+                    fringeWidthPx: fringeWidth,
+                  ),
+                  ...frames,
+                ].take(12).toList();
+              }
               state.value = state.value.copyWith(
                 lastMessage: raw,
-                lastFrameSummary: summary,
+                lastFrameSummary: detailedSummary,
                 lastFrameBytes: frameBytes ?? state.value.lastFrameBytes,
+                recentFrames: frames,
+                lastTemperature: temperature ?? state.value.lastTemperature,
+                temperatureLocked:
+                    temperature != null || state.value.temperatureLocked,
               );
               if (frameBytes != null) {
                 _forwardForAnalysis(frameBytes);
@@ -5148,6 +5393,7 @@ class PairingHost {
       status: 'Not started',
       qrData: null,
       displayHost: '',
+      recentFrames: [],
       lastMessage: null,
       lastFrameSummary: null,
       lastFrameBytes: null,
@@ -5189,6 +5435,7 @@ class PairingHost {
         lastFrameBytes: null,
         lastFrameSummary: null,
         lastMessage: null,
+        recentFrames: const [],
       );
     } catch (e) {
       state.value = state.value.copyWith(status: 'Failed to start pairing: $e');
