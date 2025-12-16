@@ -5,6 +5,7 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui';
 
+import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -2611,7 +2612,8 @@ class ActiveCaptureScreen extends StatefulWidget {
 
 class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
   final GlobalKey _roiPreviewKey = GlobalKey();
-  final MobileScannerController _sessionCameraController = MobileScannerController();
+  CameraController? _sessionCameraController;
+  Future<void>? _cameraInitFuture;
   String? _lastSendSummary;
   bool _temperatureLocked = false;
   String? _temperatureValue;
@@ -2626,13 +2628,14 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
   bool _monitorOpen = false;
   Size? _lastPreviewSize;
   late final bool _livePreviewSupported;
+  bool _cameraInitFailed = false;
 
   @override
   void dispose() {
     widget.pairingChannel?.sink.close();
     _capturedPhotos.dispose();
     _monitorStatus.dispose();
-    _sessionCameraController.dispose();
+    _sessionCameraController?.dispose();
     super.dispose();
   }
 
@@ -2647,11 +2650,38 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
         queuedFrames: _queuedFrames.length,
       ),
     );
+    if (_livePreviewSupported) {
+      _cameraInitFuture = _initSessionCamera();
+    }
     if (widget.showMonitorOnStart) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         final roiState = RoiProvider.of(context);
         _openTimedCaptureWindow(roiState);
       });
+    }
+  }
+
+  Future<void> _initSessionCamera() async {
+    try {
+      final cameras = await availableCameras();
+      if (!mounted || cameras.isEmpty) return;
+      final backCamera = cameras.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.back,
+        orElse: () => cameras.first,
+      );
+      final controller = CameraController(
+        backCamera,
+        ResolutionPreset.medium,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.jpeg,
+      );
+      _sessionCameraController = controller;
+      await controller.initialize();
+      if (!mounted) return;
+      setState(() => _cameraInitFailed = false);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _cameraInitFailed = true);
     }
   }
 
@@ -2661,7 +2691,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
     setState(() => _isSending = true);
     final size = roiState.previewSize ?? const Size(1080, 1920);
     final roiPixels = roiState.pixelRectFor(size);
-    final frameBytes = await _buildRoiPreview(size, roiPixels);
+    final frameBytes = await _captureRoiFrame(roiState);
     if (!mounted) return;
 
     final payload = {
@@ -2730,24 +2760,26 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
     }
   }
 
-  Future<Uint8List> _buildRoiPreview(Size size, Rect roiPixels) async {
-    final boundary = _roiPreviewKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+  Future<Uint8List> _captureRoiFrame(RoiState roiState) async {
+    final normalized = roiState.normalizedRect;
+    final controller = _sessionCameraController;
 
-    if (boundary != null) {
+    if (_livePreviewSupported && controller != null && controller.value.isInitialized) {
       try {
-        final pixelRatio = MediaQuery.of(context).devicePixelRatio;
-        final fullImage = await boundary.toImage(pixelRatio: pixelRatio);
+        final file = await controller.takePicture();
+        final bytes = await file.readAsBytes();
+        final image = await decodeImageFromList(bytes);
         final roiRect = Rect.fromLTWH(
-          roiPixels.left * pixelRatio,
-          roiPixels.top * pixelRatio,
-          roiPixels.width * pixelRatio,
-          roiPixels.height * pixelRatio,
+          normalized.left * image.width,
+          normalized.top * image.height,
+          normalized.width * image.width,
+          normalized.height * image.height,
         );
 
         final recorder = PictureRecorder();
         final canvas = Canvas(recorder);
         canvas.drawImageRect(
-          fullImage,
+          image,
           roiRect,
           Rect.fromLTWH(0, 0, roiRect.width, roiRect.height),
           Paint(),
@@ -2756,13 +2788,15 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
         final cropped = await recorder
             .endRecording()
             .toImage(max(1, roiRect.width.round()), max(1, roiRect.height.round()));
-        final bytes = await cropped.toByteData(format: ImageByteFormat.png);
-        if (bytes != null) {
-          return bytes.buffer.asUint8List();
+        final data = await cropped.toByteData(format: ImageByteFormat.png);
+        if (data != null) {
+          return data.buffer.asUint8List();
         }
       } catch (_) {}
     }
 
+    final size = roiState.previewSize ?? const Size(1080, 1920);
+    final fallbackRoi = roiState.pixelRectFor(size);
     final recorder = PictureRecorder();
     final canvas = Canvas(recorder);
     final width = max(1, size.width.round());
@@ -2779,11 +2813,11 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
       Paint()..shader = gradient,
     );
     canvas.drawRect(
-      roiPixels,
+      fallbackRoi,
       Paint()..color = Colors.white.withOpacity(0.2),
     );
     canvas.drawRRect(
-      RRect.fromRectAndRadius(roiPixels, const Radius.circular(8)),
+      RRect.fromRectAndRadius(fallbackRoi, const Radius.circular(8)),
       Paint()
         ..color = Colors.white.withOpacity(0.4)
         ..style = PaintingStyle.stroke
@@ -2792,7 +2826,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
 
     final label = TextPainter(
       text: TextSpan(
-        text: '${roiPixels.width.toStringAsFixed(0)} x ${roiPixels.height.toStringAsFixed(0)} @ (${roiPixels.left.toStringAsFixed(0)}, ${roiPixels.top.toStringAsFixed(0)})',
+        text: '${fallbackRoi.width.toStringAsFixed(0)} x ${fallbackRoi.height.toStringAsFixed(0)} @ (${fallbackRoi.left.toStringAsFixed(0)}, ${fallbackRoi.top.toStringAsFixed(0)})',
         style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
       ),
       textDirection: TextDirection.ltr,
@@ -2802,6 +2836,18 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
     final image = await recorder.endRecording().toImage(width, height);
     final data = await image.toByteData(format: ImageByteFormat.png);
     return data?.buffer.asUint8List() ?? Uint8List(0);
+  }
+
+  Widget _buildGradientPlaceholder() {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Color(0xFF0EA5E9), Color(0xFF1D4ED8)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+    );
   }
 
   Future<void> _promptTemperature() async {
@@ -2986,10 +3032,17 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                   valueListenable: PairingHost.instance.state,
                   builder: (context, pairingState, _) {
                     final background = _livePreviewSupported
-                        ? MobileScanner(
-                            controller: _sessionCameraController,
-                            fit: BoxFit.cover,
-                            onDetect: (_) {},
+                        ? FutureBuilder<void>(
+                            future: _cameraInitFuture,
+                            builder: (context, snapshot) {
+                              if (snapshot.connectionState == ConnectionState.waiting) {
+                                return const Center(child: CircularProgressIndicator());
+                              }
+                              if (_cameraInitFailed || _sessionCameraController == null) {
+                                return _buildGradientPlaceholder();
+                              }
+                              return CameraPreview(_sessionCameraController!);
+                            },
                           )
                         : pairingState.lastFrameBytes != null
                             ? Image.memory(
@@ -2999,15 +3052,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                                 width: size.width,
                                 height: size.height,
                               )
-                            : Container(
-                                decoration: const BoxDecoration(
-                                  gradient: LinearGradient(
-                                    colors: [Color(0xFF0EA5E9), Color(0xFF1D4ED8)],
-                                    begin: Alignment.topLeft,
-                                    end: Alignment.bottomRight,
-                                  ),
-                                ),
-                              );
+                            : _buildGradientPlaceholder();
 
                     return Stack(
                       children: [
