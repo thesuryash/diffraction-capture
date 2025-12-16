@@ -4519,7 +4519,15 @@ class _PairingCardState extends State<PairingCard> {
     PairingServerState state,
   ) async {
     final scrollController = ScrollController();
-    final photosScrollController = ScrollController();
+    final Map<String, List<_CapturedPhoto>> photosByTemperature = {};
+    for (final photo in state.recentFrames) {
+      final key = photo.temperatureLabel;
+      photosByTemperature.putIfAbsent(key, () => []).add(photo);
+    }
+    final temperatureKeys = photosByTemperature.keys.toList();
+    final galleryControllers = {
+      for (final temp in temperatureKeys) temp: ScrollController(),
+    };
 
     await showDialog(
       context: context,
@@ -4689,99 +4697,174 @@ class _PairingCardState extends State<PairingCard> {
                                 ),
                                 const SizedBox(height: 10),
                                 Expanded(
-                                  child: Scrollbar(
-                                    controller: photosScrollController,
-                                    thumbVisibility: true,
-                                    child: state.recentFrames.isEmpty
-                                        ? const Center(
-                                            child: Text('No photos received yet.'),
-                                          )
-                                        : ListView.separated(
-                                            controller: photosScrollController,
-                                            itemCount: state.recentFrames.length,
-                                            separatorBuilder: (_, __) =>
-                                                const SizedBox(height: 10),
-                                            itemBuilder: (context, index) {
-                                              final photo = state.recentFrames[index];
-                                              return GestureDetector(
-                                                onTap: () => _showFramePreview(
-                                                  context,
-                                                  photo.bytes,
-                                                  summary: photo.summary,
-                                                ),
-                                                child: Container(
-                                                  padding: const EdgeInsets.all(10),
-                                                  decoration: BoxDecoration(
-                                                    color: const Color(0xFFF9FAFB),
-                                                    borderRadius:
-                                                        BorderRadius.circular(12),
-                                                    border: Border.all(
-                                                      color: const Color(0xFFE5E7EB),
+                                  child: state.recentFrames.isEmpty
+                                      ? const Center(
+                                          child:
+                                              Text('No photos received yet.'),
+                                        )
+                                      : DefaultTabController(
+                                          length: temperatureKeys.length,
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              TabBar(
+                                                isScrollable: true,
+                                                labelColor: const Color(0xFF2563EB),
+                                                unselectedLabelColor:
+                                                    const Color(0xFF6B7280),
+                                                indicatorColor:
+                                                    const Color(0xFF2563EB),
+                                                tabs: [
+                                                  for (final temp in temperatureKeys)
+                                                    Tab(
+                                                      text: temp == '--'
+                                                          ? 'No temp'
+                                                          : '$temp °C',
                                                     ),
-                                                  ),
-                                                  child: Row(
-                                                    children: [
-                                                      ClipRRect(
-                                                        borderRadius:
-                                                            BorderRadius.circular(10),
-                                                        child: Image.memory(
-                                                          photo.bytes,
-                                                          width: 140,
-                                                          height: 120,
-                                                          fit: BoxFit.cover,
-                                                        ),
-                                                      ),
-                                                      const SizedBox(width: 12),
-                                                      Expanded(
-                                                        child: Column(
-                                                          crossAxisAlignment:
-                                                              CrossAxisAlignment.start,
-                                                          children: [
-                                                            Text(
-                                                              'Captured at ${photo.timestampLabel}',
-                                                              style: const TextStyle(
-                                                                fontWeight:
-                                                                    FontWeight.w700,
+                                                ],
+                                              ),
+                                              const SizedBox(height: 10),
+                                              Expanded(
+                                                child: TabBarView(
+                                                  children: [
+                                                    for (final temp
+                                                        in temperatureKeys)
+                                                      Scrollbar(
+                                                        controller:
+                                                            galleryControllers[temp],
+                                                        thumbVisibility: true,
+                                                        child: ListView.separated(
+                                                          controller:
+                                                              galleryControllers[temp],
+                                                          itemCount:
+                                                              photosByTemperature[temp]!
+                                                                  .length,
+                                                          separatorBuilder: (_, __) =>
+                                                              const SizedBox(
+                                                                  height: 10),
+                                                          itemBuilder:
+                                                              (context, index) {
+                                                            final photo =
+                                                                photosByTemperature[temp]![
+                                                                    index];
+                                                            return GestureDetector(
+                                                              onTap: () =>
+                                                                  _showFramePreview(
+                                                                context,
+                                                                photo.bytes,
+                                                                summary:
+                                                                    photo.summary,
                                                               ),
-                                                            ),
-                                                            const SizedBox(height: 6),
-                                                            Text(
-                                                              photo.summary,
-                                                              style: const TextStyle(
-                                                                color: Color(0xFF475569),
-                                                              ),
-                                                            ),
-                                                            const SizedBox(height: 6),
-                                                            Row(
-                                                              children: [
-                                                                const Icon(
-                                                                  Icons.thermostat_outlined,
-                                                                  size: 18,
-                                                                  color:
-                                                                      Color(0xFF2563EB),
-                                                                ),
-                                                                const SizedBox(width: 6),
-                                                                Text(
-                                                                  '${photo.temperatureLabel} °C',
-                                                                  style: const TextStyle(
-                                                                    color:
-                                                                        Color(0xFF0F172A),
-                                                                    fontWeight:
-                                                                        FontWeight.w600,
+                                                              child: Container(
+                                                                padding:
+                                                                    const EdgeInsets
+                                                                        .all(10),
+                                                                decoration:
+                                                                    BoxDecoration(
+                                                                  color: const Color(
+                                                                      0xFFF9FAFB),
+                                                                  borderRadius:
+                                                                      BorderRadius
+                                                                          .circular(
+                                                                              12),
+                                                                  border: Border.all(
+                                                                    color: const Color(
+                                                                        0xFFE5E7EB),
                                                                   ),
                                                                 ),
-                                                              ],
-                                                            ),
-                                                          ],
+                                                                child: Row(
+                                                                  children: [
+                                                                    ClipRRect(
+                                                                      borderRadius:
+                                                                          BorderRadius
+                                                                              .circular(
+                                                                                  10),
+                                                                      child: Image
+                                                                          .memory(
+                                                                        photo
+                                                                            .bytes,
+                                                                        width:
+                                                                            140,
+                                                                        height:
+                                                                            120,
+                                                                        fit: BoxFit
+                                                                            .cover,
+                                                                      ),
+                                                                    ),
+                                                                    const SizedBox(
+                                                                        width: 12),
+                                                                    Expanded(
+                                                                      child:
+                                                                          Column(
+                                                                        crossAxisAlignment:
+                                                                            CrossAxisAlignment
+                                                                                .start,
+                                                                        children: [
+                                                                          Text(
+                                                                            'Captured at ${photo.timestampLabel}',
+                                                                            style:
+                                                                                const TextStyle(
+                                                                              fontWeight:
+                                                                                  FontWeight.w700,
+                                                                            ),
+                                                                          ),
+                                                                          const SizedBox(
+                                                                              height:
+                                                                                  6),
+                                                                          Text(
+                                                                            photo
+                                                                                .summary,
+                                                                            style:
+                                                                                const TextStyle(
+                                                                              color:
+                                                                                  Color(0xFF475569),
+                                                                            ),
+                                                                          ),
+                                                                          const SizedBox(
+                                                                              height:
+                                                                                  6),
+                                                                          Row(
+                                                                            children: [
+                                                                              const Icon(
+                                                                                Icons
+                                                                                    .thermostat_outlined,
+                                                                                size:
+                                                                                    18,
+                                                                                color:
+                                                                                    Color(0xFF2563EB),
+                                                                              ),
+                                                                              const SizedBox(
+                                                                                  width:
+                                                                                      6),
+                                                                              Text(
+                                                                                '${photo.temperatureLabel} °C',
+                                                                                style:
+                                                                                    const TextStyle(
+                                                                                  color:
+                                                                                      Color(0xFF0F172A),
+                                                                                  fontWeight:
+                                                                                      FontWeight.w600,
+                                                                                ),
+                                                                              ),
+                                                                            ],
+                                                                          ),
+                                                                        ],
+                                                                      ),
+                                                                    ),
+                                                                  ],
+                                                                ),
+                                                              ),
+                                                            );
+                                                          },
                                                         ),
                                                       ),
-                                                    ],
-                                                  ),
+                                                  ],
                                                 ),
-                                              );
-                                            },
+                                              ),
+                                            ],
                                           ),
-                                  ),
+                                        ),
                                 ),
                               ],
                             ),
@@ -4799,7 +4882,9 @@ class _PairingCardState extends State<PairingCard> {
     );
 
     scrollController.dispose();
-    photosScrollController.dispose();
+    for (final controller in galleryControllers.values) {
+      controller.dispose();
+    }
   }
 
   @override
