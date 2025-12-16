@@ -2815,6 +2815,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
       'type': 'frame',
       'session': widget.sessionName,
       'timestamp': DateTime.now().toIso8601String(),
+      'temperature': _temperatureValue,
       'roi': {
         'normalized': {
           'left': roiState.normalizedRect.left,
@@ -2866,6 +2867,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
   void _flushQueue() {
     if (widget.pairingChannel == null || !_temperatureLocked) return;
     for (final payload in List<Map<String, dynamic>>.from(_queuedFrames)) {
+      payload['temperature'] ??= _temperatureValue;
       _sendCaptureToDesktop(payload);
     }
     setState(() => _queuedFrames.clear());
@@ -2995,6 +2997,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
       _temperatureLocked = true;
       _temperatureValue = entered.trim();
     });
+    _backfillCaptureTemperatures(_temperatureValue!);
     _updateMonitorStatus();
     if (widget.pairingChannel != null) {
       widget.pairingChannel?.sink.add(
@@ -3015,11 +3018,27 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
         createdAt: DateTime.now(),
         summary:
             '${roi.width.toStringAsFixed(0)}x${roi.height.toStringAsFixed(0)} @ (${roi.left.toStringAsFixed(0)}, ${roi.top.toStringAsFixed(0)})',
+        temperature: _temperatureValue,
       ),
       ..._capturedPhotos.value,
     ];
     _capturedPhotos.value = updated.take(12).toList();
     _updateMonitorStatus();
+  }
+
+  void _backfillCaptureTemperatures(String value) {
+    _capturedPhotos.value = _capturedPhotos.value
+        .map(
+          (photo) => photo.temperature != null
+              ? photo
+              : _CapturedPhoto(
+                  bytes: photo.bytes,
+                  createdAt: photo.createdAt,
+                  summary: photo.summary,
+                  temperature: value,
+                ),
+        )
+        .toList();
   }
 
   void _openTimedCaptureWindow(RoiState roiState) {
@@ -3472,11 +3491,13 @@ class _CapturedPhoto {
   final Uint8List bytes;
   final DateTime createdAt;
   final String summary;
+  final String? temperature;
 
   const _CapturedPhoto({
     required this.bytes,
     required this.createdAt,
     required this.summary,
+    this.temperature,
   });
 
   String get timestampLabel {
@@ -3486,6 +3507,8 @@ class _CapturedPhoto {
     final second = time.second.toString().padLeft(2, '0');
     return '$hour:$minute:$second';
   }
+
+  String get temperatureLabel => temperature ?? '--';
 }
 
 class _MonitorStatus {
@@ -3634,7 +3657,7 @@ class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
     return Dialog(
       insetPadding: const EdgeInsets.all(24),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 520),
+        constraints: const BoxConstraints(maxWidth: 820, maxHeight: 680),
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(
@@ -3809,8 +3832,8 @@ class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
                                   borderRadius: BorderRadius.circular(10),
                                   child: Image.memory(
                                     photo.bytes,
-                                    width: 140,
-                                    height: 140,
+                                    width: 180,
+                                    height: 180,
                                     fit: BoxFit.cover,
                                   ),
                                 ),
@@ -3832,6 +3855,24 @@ class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
                                         style: const TextStyle(
                                           color: Color(0xFF475569),
                                         ),
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Row(
+                                        children: [
+                                          const Icon(
+                                            Icons.thermostat_outlined,
+                                            size: 18,
+                                            color: Color(0xFF2563EB),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            '${photo.temperatureLabel} °C',
+                                            style: const TextStyle(
+                                              color: Color(0xFF0F172A),
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ],
                                   ),
@@ -4710,6 +4751,27 @@ class _PairingCardState extends State<PairingCard> {
                                                                 color: Color(0xFF475569),
                                                               ),
                                                             ),
+                                                            const SizedBox(height: 6),
+                                                            Row(
+                                                              children: [
+                                                                const Icon(
+                                                                  Icons.thermostat_outlined,
+                                                                  size: 18,
+                                                                  color:
+                                                                      Color(0xFF2563EB),
+                                                                ),
+                                                                const SizedBox(width: 6),
+                                                                Text(
+                                                                  '${photo.temperatureLabel} °C',
+                                                                  style: const TextStyle(
+                                                                    color:
+                                                                        Color(0xFF0F172A),
+                                                                    fontWeight:
+                                                                        FontWeight.w600,
+                                                                  ),
+                                                                ),
+                                                              ],
+                                                            ),
                                                           ],
                                                         ),
                                                       ),
@@ -5030,6 +5092,7 @@ class PairingHost {
           try {
             final payload = jsonDecode(raw ?? '');
             if (payload is Map && payload['type'] == 'frame') {
+              final temperature = payload['temperature']?.toString();
               final roi = payload['roi'] as Map?;
               final pixels = roi?['pixels'] as Map?;
               Uint8List? frameBytes;
@@ -5049,6 +5112,7 @@ class PairingHost {
                     bytes: frameBytes,
                     createdAt: DateTime.now(),
                     summary: summary,
+                    temperature: temperature,
                   ),
                   ...frames,
                 ].take(12).toList();
@@ -5058,6 +5122,9 @@ class PairingHost {
                 lastFrameSummary: summary,
                 lastFrameBytes: frameBytes ?? state.value.lastFrameBytes,
                 recentFrames: frames,
+                lastTemperature: temperature ?? state.value.lastTemperature,
+                temperatureLocked:
+                    temperature != null || state.value.temperatureLocked,
               );
               if (frameBytes != null) {
                 _forwardForAnalysis(frameBytes);
