@@ -673,7 +673,6 @@ class _SidebarState extends State<_Sidebar> {
       },
     );
   }
-}
 
 class _Card extends StatelessWidget {
   final Widget child;
@@ -4788,67 +4787,23 @@ class PairingHost {
   String? _host;
   int _port = 0;
 
-  Future<void> startForProject(String projectName) async {
-    await stop();
-    if (state.value.running) return;
-    if (kIsWeb) return;
-    try {
-      final interfaces = await NetworkInterface.list(
-        type: InternetAddressType.IPv4,
-        includeLinkLocal: false,
-        includeLoopback: false,
-      );
-      _host = interfaces
-          .expand((i) => i.addresses)
-          .firstWhere((a) => !a.isLoopback && a.type == InternetAddressType.IPv4,
-              orElse: () => InternetAddress.loopbackIPv4)
-          .address;
-      _token = _randomToken();
-      _server = await HttpServer.bind(InternetAddress.anyIPv4, 8787);
-      _port = _server!.port;
-      _server!.listen(_handleRequest);
-      final qr =
-          'ws://$_host:$_port/pair?token=$_token&mode=live&project=${Uri.encodeComponent(projectName)}';
-      state.value = state.value.copyWith(
-        running: true,
-        status: 'Awaiting scan for $projectName',
-        qrData: qr,
-        displayHost: 'ws://$_host:$_port',
-        temperatureLocked: false,
-        lastTemperature: null,
-        lastFrameBytes: null,
-        lastFrameSummary: null,
-        lastMessage: null,
-      );
-    } catch (e) {
-      state.value = state.value.copyWith(
-        status: 'Failed to start pairing: $e',
-      );
+  String _randomToken() {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    final rand = Random.secure();
+    return List.generate(12, (_) => chars[rand.nextInt(chars.length)]).join();
+  }
+
+  String _fmtNum(dynamic value) {
+    if (value is num) {
+      return value.toStringAsFixed(0);
     }
 
     
 
-  Future<void> stop() async {
-    try {
-      await _client?.close();
-    } catch (_) {}
-    try {
-      await _server?.close(force: true);
-    } catch (_) {}
-    _client = null;
-    _server = null;
-    state.value = const PairingServerState(
-      running: false,
-      connected: false,
-      status: 'Not started',
-      qrData: null,
-      displayHost: '',
-      lastMessage: null,
-      lastFrameSummary: null,
-      lastFrameBytes: null,
-      lastTemperature: null,
-      temperatureLocked: false,
-    );
+  void _forwardForAnalysis(Uint8List bytes) {
+    // Placeholder for downstream analysis module integration.
+    // Frames are made available through the state notifier and can be
+    // consumed by future processing pipelines.
   }
 
   Future<void> _handleRequest(HttpRequest request) async {
@@ -4931,22 +4886,65 @@ class PairingHost {
     }
   }
 
-  void _forwardForAnalysis(Uint8List bytes) {
-    // Placeholder for downstream analysis module integration.
-    // Frames are made available through the state notifier and can be
-    // consumed by future processing pipelines.
+  Future<void> stop() async {
+    try {
+      await _client?.close();
+    } catch (_) {}
+    try {
+      await _server?.close(force: true);
+    } catch (_) {}
+    _client = null;
+    _server = null;
+    state.value = const PairingServerState(
+      running: false,
+      connected: false,
+      status: 'Not started',
+      qrData: null,
+      displayHost: '',
+      lastMessage: null,
+      lastFrameSummary: null,
+      lastFrameBytes: null,
+      lastTemperature: null,
+      temperatureLocked: false,
+    );
   }
 
-  String _randomToken() {
-    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    final rand = Random.secure();
-    return List.generate(12, (_) => chars[rand.nextInt(chars.length)]).join();
-  }
-
-  String _fmtNum(dynamic value) {
-    if (value is num) {
-      return value.toStringAsFixed(0);
+  Future<void> startForProject(String projectName) async {
+    await stop();
+    if (state.value.running) return;
+    if (kIsWeb) return;
+    try {
+      final interfaces = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLinkLocal: false,
+        includeLoopback: false,
+      );
+      _host = interfaces
+          .expand((i) => i.addresses)
+          .firstWhere((a) => !a.isLoopback && a.type == InternetAddressType.IPv4,
+              orElse: () => InternetAddress.loopbackIPv4)
+          .address;
+      _token = _randomToken();
+      _server = await HttpServer.bind(InternetAddress.anyIPv4, 8787);
+      _port = _server!.port;
+      _server!.listen(_handleRequest);
+      final qr =
+          'ws://$_host:$_port/pair?token=$_token&mode=live&project=${Uri.encodeComponent(projectName)}';
+      state.value = state.value.copyWith(
+        running: true,
+        status: 'Awaiting scan for $projectName',
+        qrData: qr,
+        displayHost: 'ws://$_host:$_port',
+        temperatureLocked: false,
+        lastTemperature: null,
+        lastFrameBytes: null,
+        lastFrameSummary: null,
+        lastMessage: null,
+      );
+    } catch (e) {
+      state.value = state.value.copyWith(
+        status: 'Failed to start pairing: $e',
+      );
     }
-    return value?.toString() ?? '?';
   }
 }
