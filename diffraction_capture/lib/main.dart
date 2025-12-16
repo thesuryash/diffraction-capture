@@ -580,7 +580,7 @@ class _MainContent extends StatelessWidget {
   }
 }
 
-class _Sidebar extends StatelessWidget {
+class _Sidebar extends StatefulWidget {
   final List<ProjectData> projects;
   final ProjectData? activeProject;
   final ValueChanged<ProjectData?> onProjectSelected;
@@ -594,64 +594,84 @@ class _Sidebar extends StatelessWidget {
     required this.pairingCard,
   });
 
-    @override
-    Widget build(BuildContext context) {
-      return LayoutBuilder(
-        builder: (context, constraints) {
-          return Scrollbar(
-            thumbVisibility: true,
-            child: SingleChildScrollView(
-              padding: EdgeInsets.zero,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _Card(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Padding(
-                            padding: EdgeInsets.only(bottom: 8.0),
-                            child: Text(
-                              'Projects',
-                              style: TextStyle(
-                                fontWeight: FontWeight.w700,
-                                fontSize: 15,
-                              ),
+  @override
+  State<_Sidebar> createState() => _SidebarState();
+}
+
+class _SidebarState extends State<_Sidebar> {
+  late final ScrollController _scrollController;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController = ScrollController();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Scrollbar(
+          controller: _scrollController,
+          thumbVisibility: true,
+          child: SingleChildScrollView(
+            controller: _scrollController,
+            padding: EdgeInsets.zero,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _Card(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Padding(
+                          padding: EdgeInsets.only(bottom: 8.0),
+                          child: Text(
+                            'Projects',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 15,
                             ),
                           ),
-                          ...projects.map((project) {
-                            final isActive = project.isActive;
-                            return Padding(
-                              padding: const EdgeInsets.only(bottom: 10),
-                              child: InkWell(
-                                borderRadius: BorderRadius.circular(12),
-                                onTap: () => onProjectSelected(project),
-                                child: _SelectableTile(
-                                  title: project.name,
-                                  subtitle: '${project.sessions} sessions',
-                                  icon: isActive
-                                      ? Icons.folder_special
-                                      : Icons.folder_outlined,
-                                  isSelected: isActive,
-                                ),
+                        ),
+                        ...widget.projects.map((project) {
+                          final isActive = project.isActive;
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(12),
+                              onTap: () => widget.onProjectSelected(project),
+                              child: _SelectableTile(
+                                title: project.name,
+                                subtitle: '${project.sessions} sessions',
+                                icon: isActive
+                                    ? Icons.folder_special
+                                    : Icons.folder_outlined,
+                                isSelected: isActive,
                               ),
-                            );
-                          }),
-                        ],
-                      ),
+                            ),
+                          );
+                        }),
+                      ],
                     ),
-                    const SizedBox(height: 10),
-                    pairingCard,
-                  ],
-                ),
+                  ),
+                  const SizedBox(height: 10),
+                  widget.pairingCard,
+                ],
               ),
             ),
-          );
-        },
-      );
-    }
+          ),
+        );
+      },
+    );
   }
 
 class _Card extends StatelessWidget {
@@ -4261,8 +4281,10 @@ class _PairingCardState extends State<PairingCard> {
     );
   }
 
-  void _openProjectWindow(BuildContext context, PairingServerState state) {
-    showDialog(
+  Future<void> _openProjectWindow(BuildContext context, PairingServerState state) async {
+    final scrollController = ScrollController();
+
+    await showDialog(
       context: context,
       builder: (ctx) {
         return Dialog(
@@ -4311,8 +4333,10 @@ class _PairingCardState extends State<PairingCard> {
                         Expanded(
                           flex: 5,
                           child: Scrollbar(
+                            controller: scrollController,
                             thumbVisibility: true,
                             child: SingleChildScrollView(
+                              controller: scrollController,
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
@@ -4484,10 +4508,11 @@ class _PairingCardState extends State<PairingCard> {
                 ],
               ),
             ),
-          ),
-        );
-      },
-    );
+          );
+        },
+      );
+
+    scrollController.dispose();
   }
 
   @override
@@ -4772,8 +4797,8 @@ class PairingHost {
     if (value is num) {
       return value.toStringAsFixed(0);
     }
-    return value?.toString() ?? '?';
-  }
+
+    
 
   void _forwardForAnalysis(Uint8List bytes) {
     // Placeholder for downstream analysis module integration.
