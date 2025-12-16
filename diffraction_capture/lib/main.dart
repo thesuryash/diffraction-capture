@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:ui';
+import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
@@ -2834,7 +2835,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
       'frame': base64Encode(frameBytes),
     };
 
-    _recordCapture(frameBytes, roiPixels);
+    await _recordCapture(frameBytes, roiPixels);
 
     final connected = widget.pairingChannel != null;
 
@@ -3011,7 +3012,8 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
     _flushQueue();
   }
 
-  void _recordCapture(Uint8List bytes, Rect roi) {
+  Future<void> _recordCapture(Uint8List bytes, Rect roi) async {
+    final fringeWidth = await _estimateFringeWidthFromImage(bytes);
     final updated = [
       _CapturedPhoto(
         bytes: bytes,
@@ -3019,6 +3021,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
         summary:
             '${roi.width.toStringAsFixed(0)}x${roi.height.toStringAsFixed(0)} @ (${roi.left.toStringAsFixed(0)}, ${roi.top.toStringAsFixed(0)})',
         temperature: _temperatureValue,
+        fringeWidthPx: fringeWidth,
       ),
       ..._capturedPhotos.value,
     ];
@@ -3036,6 +3039,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                   createdAt: photo.createdAt,
                   summary: photo.summary,
                   temperature: value,
+                  fringeWidthPx: photo.fringeWidthPx,
                 ),
         )
         .toList();
@@ -3492,12 +3496,14 @@ class _CapturedPhoto {
   final DateTime createdAt;
   final String summary;
   final String? temperature;
+  final double? fringeWidthPx;
 
   const _CapturedPhoto({
     required this.bytes,
     required this.createdAt,
     required this.summary,
     this.temperature,
+    this.fringeWidthPx,
   });
 
   String get timestampLabel {
@@ -3509,6 +3515,9 @@ class _CapturedPhoto {
   }
 
   String get temperatureLabel => temperature ?? '--';
+
+  String get fringeWidthLabel =>
+      fringeWidthPx != null ? '${fringeWidthPx!.toStringAsFixed(1)} px' : '--';
 }
 
 class _MonitorStatus {
@@ -3867,6 +3876,24 @@ class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
                                           const SizedBox(width: 6),
                                           Text(
                                             '${photo.temperatureLabel} °C',
+                                            style: const TextStyle(
+                                              color: Color(0xFF0F172A),
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Row(
+                                        children: [
+                                          const Icon(
+                                            Icons.grain_outlined,
+                                            size: 18,
+                                            color: Color(0xFF2563EB),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            'Fringe ≈ ${photo.fringeWidthLabel}',
                                             style: const TextStyle(
                                               color: Color(0xFF0F172A),
                                               fontWeight: FontWeight.w600,
@@ -4433,6 +4460,73 @@ Color _badgeColor(String badge) {
   }
 }
 
+Future<double?> _estimateFringeWidthFromImage(Uint8List bytes) async {
+  try {
+    final codec = await instantiateImageCodec(bytes);
+    final frame = await codec.getNextFrame();
+    final image = frame.image;
+    final byteData = await image.toByteData(format: ImageByteFormat.rawRgba);
+    if (byteData == null) return null;
+
+    final width = image.width;
+    final height = image.height;
+    if (width < 8 || height < 8) return null;
+
+    final bandTop = max(0, height ~/ 2 - 2);
+    final bandBottom = min(height - 1, height ~/ 2 + 2);
+    final bandHeight = bandBottom - bandTop + 1;
+
+    final data = byteData.buffer.asUint8List();
+    final intensities = List<double>.filled(width, 0);
+    for (int y = bandTop; y <= bandBottom; y++) {
+      final rowStart = y * width * 4;
+      for (int x = 0; x < width; x++) {
+        final pixelIndex = rowStart + x * 4;
+        final r = data[pixelIndex];
+        final g = data[pixelIndex + 1];
+        final b = data[pixelIndex + 2];
+        intensities[x] += 0.299 * r + 0.587 * g + 0.114 * b;
+      }
+    }
+
+    for (int i = 0; i < intensities.length; i++) {
+      intensities[i] /= bandHeight;
+    }
+
+    final minVal = intensities.reduce(min);
+    final maxVal = intensities.reduce(max);
+    if (maxVal - minVal < 1) return null;
+
+    final threshold = minVal + (maxVal - minVal) * 0.35;
+    final List<int> peaks = [];
+    for (int i = 1; i < intensities.length - 1; i++) {
+      final value = intensities[i];
+      if (value >= intensities[i - 1] &&
+          value >= intensities[i + 1] &&
+          value >= threshold) {
+        if (peaks.isEmpty || i - peaks.last > 2) {
+          peaks.add(i);
+        }
+      }
+    }
+
+    if (peaks.length < 2) return null;
+
+    final List<double> spacings = [];
+    for (int i = 1; i < peaks.length; i++) {
+      final gap = (peaks[i] - peaks[i - 1]).toDouble();
+      if (gap > 2) spacings.add(gap);
+    }
+
+    if (spacings.isEmpty) return null;
+    final average =
+        spacings.reduce((value, element) => value + element) / spacings.length;
+    return average;
+  } catch (_) {
+    return null;
+  }
+}
+
 class PairingCard extends StatefulWidget {
   final ProjectData? activeProject;
 
@@ -4849,6 +4943,25 @@ class _PairingCardState extends State<PairingCard> {
                                                                               ),
                                                                             ],
                                                                           ),
+                                                                          const SizedBox(height: 6),
+                                                                          Row(
+                                                                            children: [
+                                                                              const Icon(
+                                                                                Icons.grain_outlined,
+                                                                                size: 18,
+                                                                                color:
+                                                                                    Color(0xFF2563EB),
+                                                                              ),
+                                                                              const SizedBox(width: 6),
+                                                                              Text(
+                                                                                'Fringe ≈ ${photo.fringeWidthLabel}',
+                                                                                style: const TextStyle(
+                                                                                  color: Color(0xFF0F172A),
+                                                                                  fontWeight: FontWeight.w600,
+                                                                                ),
+                                                                              ),
+                                                                            ],
+                                                                          ),
                                                                         ],
                                                                       ),
                                                                     ),
@@ -5190,21 +5303,28 @@ class PairingHost {
               final summary = pixels != null
                   ? 'ROI ${_fmtNum(pixels['width'])}x${_fmtNum(pixels['height'])} at (${_fmtNum(pixels['x'])}, ${_fmtNum(pixels['y'])})'
                   : 'ROI frame received';
+              final fringeWidth = frameBytes != null
+                  ? await _estimateFringeWidthFromImage(frameBytes)
+                  : null;
+              final detailedSummary = fringeWidth != null
+                  ? '$summary • Fringe ≈ ${fringeWidth.toStringAsFixed(1)} px'
+                  : summary;
               var frames = state.value.recentFrames;
               if (frameBytes != null) {
                 frames = [
                   _CapturedPhoto(
                     bytes: frameBytes,
                     createdAt: DateTime.now(),
-                    summary: summary,
+                    summary: detailedSummary,
                     temperature: temperature,
+                    fringeWidthPx: fringeWidth,
                   ),
                   ...frames,
                 ].take(12).toList();
               }
               state.value = state.value.copyWith(
                 lastMessage: raw,
-                lastFrameSummary: summary,
+                lastFrameSummary: detailedSummary,
                 lastFrameBytes: frameBytes ?? state.value.lastFrameBytes,
                 recentFrames: frames,
                 lastTemperature: temperature ?? state.value.lastTemperature,
