@@ -5285,7 +5285,7 @@ class PairingHost {
             'Paired with ${request.connectionInfo?.remoteAddress.address ?? 'device'}',
       );
       socket.listen(
-        (data) {
+        (data) async {
           final raw = data?.toString();
           try {
             final payload = jsonDecode(raw ?? '');
