@@ -2,13 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -21,7 +19,7 @@ void main() {
 class DiffractionApp extends StatelessWidget {
   const DiffractionApp({super.key});
 
-    @override
+  @override
   Widget build(BuildContext context) {
     return RoiProvider(
       notifier: RoiState(),
@@ -31,14 +29,13 @@ class DiffractionApp extends StatelessWidget {
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(
             seedColor: const Color(0xFF2563EB),
-            background: const Color(0xFFF4F5F7),
             surface: Colors.white,
           ),
           scaffoldBackgroundColor: const Color(0xFFF4F5F7),
           textTheme: ThemeData.light().textTheme.apply(
-                bodyColor: const Color(0xFF0F172A),
-                displayColor: const Color(0xFF0F172A),
-              ),
+            bodyColor: const Color(0xFF0F172A),
+            displayColor: const Color(0xFF0F172A),
+          ),
           useMaterial3: true,
         ),
         home: const ResponsiveRoot(),
@@ -101,8 +98,11 @@ class RoiState extends ChangeNotifier {
 }
 
 class RoiProvider extends InheritedNotifier<RoiState> {
-  const RoiProvider({super.key, required RoiState notifier, required Widget child})
-      : super(notifier: notifier, child: child);
+  const RoiProvider({
+    super.key,
+    required RoiState notifier,
+    required Widget child,
+  }) : super(notifier: notifier, child: child);
 
   static RoiState of(BuildContext context) {
     final provider = context.dependOnInheritedWidgetOfExactType<RoiProvider>();
@@ -115,7 +115,8 @@ class ResponsiveRoot extends StatelessWidget {
   const ResponsiveRoot({super.key});
 
   bool _isDesktopLayout(BoxConstraints constraints) {
-    if (!kIsWeb && (Platform.isMacOS || Platform.isWindows || Platform.isLinux)) {
+    if (!kIsWeb &&
+        (Platform.isMacOS || Platform.isWindows || Platform.isLinux)) {
       return true;
     }
     return constraints.maxWidth > 900 || kIsWeb;
@@ -177,7 +178,8 @@ class _DesktopDashboardState extends State<DesktopDashboard> {
             (p) => p.isActive,
             orElse: () => _projects.first,
           );
-    if (!kIsWeb && (Platform.isMacOS || Platform.isWindows || Platform.isLinux) &&
+    if (!kIsWeb &&
+        (Platform.isMacOS || Platform.isWindows || Platform.isLinux) &&
         _activeProject != null) {
       PairingHost.instance.startForProject(_activeProject!.name);
     }
@@ -195,11 +197,13 @@ class _DesktopDashboardState extends State<DesktopDashboard> {
       _activeProject = project;
       _projects = _projects
           .map(
-            (p) => p.copyWith(isActive: project != null && p.name == project.name),
+            (p) =>
+                p.copyWith(isActive: project != null && p.name == project.name),
           )
           .toList();
     });
-    if (!kIsWeb && (Platform.isMacOS || Platform.isWindows || Platform.isLinux)) {
+    if (!kIsWeb &&
+        (Platform.isMacOS || Platform.isWindows || Platform.isLinux)) {
       if (project != null) {
         PairingHost.instance.startForProject(project.name);
       } else {
@@ -209,7 +213,9 @@ class _DesktopDashboardState extends State<DesktopDashboard> {
   }
 
   void _showSnack(BuildContext context, String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _createProject(BuildContext context) async {
@@ -224,21 +230,30 @@ class _DesktopDashboardState extends State<DesktopDashboard> {
             decoration: const InputDecoration(labelText: 'Project name'),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
             ElevatedButton(
               onPressed: () {
                 if (controller.text.trim().isEmpty) return;
                 Navigator.pop(
                   ctx,
-                  ProjectData(name: controller.text.trim(), sessions: 0, isActive: true),
+                  ProjectData(
+                    name: controller.text.trim(),
+                    sessions: 0,
+                    isActive: true,
+                  ),
                 );
               },
               child: const Text('Create'),
-            )
+            ),
           ],
         );
       },
     );
+
+    if (!mounted) return;
 
     if (created != null) {
       setState(() {
@@ -257,9 +272,14 @@ class _DesktopDashboardState extends State<DesktopDashboard> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Settings'),
-        content: const Text('Settings panel coming soon. Pairing and projects are active.'),
+        content: const Text(
+          'Settings panel coming soon. Pairing and projects are active.',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
         ],
       ),
     );
@@ -271,9 +291,13 @@ class _DesktopDashboardState extends State<DesktopDashboard> {
       builder: (ctx) => AlertDialog(
         title: const Text('Import Data'),
         content: const Text(
-            'Drag a session archive into this window to import. For now this will simulate a successful import.'),
+          'Drag a session archive into this window to import. For now this will simulate a successful import.',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
           ElevatedButton(
             onPressed: () {
               Navigator.pop(ctx);
@@ -294,10 +318,13 @@ class _DesktopDashboardState extends State<DesktopDashboard> {
                   images: (_stats?.images ?? 0) + extra.images,
                 );
               });
-              _showSnack(context, 'Import completed and added to recent sessions');
+              _showSnack(
+                context,
+                'Import completed and added to recent sessions',
+              );
             },
             child: const Text('Simulate Import'),
-          )
+          ),
         ],
       ),
     );
@@ -317,16 +344,25 @@ class _DesktopDashboardState extends State<DesktopDashboard> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(session.title),
-        content: Text('Captured on ${session.date}\n${session.images} images • ${session.temps} temps'),
+        content: Text(
+          'Captured on ${session.date}\n${session.images} images • ${session.temps} temps',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
         ],
       ),
     );
   }
 
   void _viewAllSessions() {
-    _mainScroll.animateTo(0, duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
+    _mainScroll.animateTo(
+      0,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
   }
 
   @override
@@ -386,7 +422,11 @@ class Header extends StatelessWidget {
   final VoidCallback onNewProject;
   final VoidCallback onOpenSettings;
 
-  const Header({super.key, required this.onNewProject, required this.onOpenSettings});
+  const Header({
+    super.key,
+    required this.onNewProject,
+    required this.onOpenSettings,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -405,8 +445,10 @@ class Header extends StatelessWidget {
               color: const Color(0xFF2563EB),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: const Icon(Icons.compass_calibration_rounded,
-                color: Colors.white),
+            child: const Icon(
+              Icons.compass_calibration_rounded,
+              color: Colors.white,
+            ),
           ),
           const SizedBox(width: 12),
           Column(
@@ -414,10 +456,7 @@ class Header extends StatelessWidget {
             children: const [
               Text(
                 'Diffraction Capture',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                ),
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
               ),
               SizedBox(height: 2),
               Text(
@@ -436,8 +475,7 @@ class Header extends StatelessWidget {
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFF2563EB),
               foregroundColor: Colors.white,
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
@@ -450,7 +488,7 @@ class Header extends StatelessWidget {
             onPressed: onOpenSettings,
             icon: const Icon(Icons.settings_outlined),
             color: const Color(0xFF4B5563),
-          )
+          ),
         ],
       ),
     );
@@ -489,9 +527,9 @@ class _MainContent extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             'Welcome back',
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 6),
           const Text(
@@ -566,7 +604,7 @@ class _MainContent extends StatelessWidget {
                         onOpen: () => onOpenSession(sessions[i]),
                       ),
                       if (i != sessions.length - 1) const Divider(height: 24),
-                    ]
+                    ],
                   ],
                 ),
               ],
@@ -673,6 +711,7 @@ class _SidebarState extends State<_Sidebar> {
       },
     );
   }
+}
 
 class _Card extends StatelessWidget {
   final Widget child;
@@ -756,10 +795,7 @@ class _SelectableTile extends StatelessWidget {
               ],
             ),
           ),
-          const Icon(
-            Icons.folder_zip_outlined,
-            color: Color(0xFF9CA3AF),
-          ),
+          const Icon(Icons.folder_zip_outlined, color: Color(0xFF9CA3AF)),
         ],
       ),
     );
@@ -775,10 +811,7 @@ class _StatusDot extends StatelessWidget {
     return Container(
       width: 10,
       height: 10,
-      decoration: BoxDecoration(
-        color: color,
-        shape: BoxShape.circle,
-      ),
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
     );
   }
 }
@@ -811,13 +844,10 @@ class _ActionCard extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: color.withOpacity(0.12),
+                  color: color.withAlpha((0.12 * 255).round()),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(
-                  icon,
-                  color: color,
-                ),
+                child: Icon(icon, color: color),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -878,8 +908,8 @@ class SessionRow extends StatelessWidget {
       children: [
         Container(
           padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: iconColor.withOpacity(0.12),
+            decoration: BoxDecoration(
+            color: iconColor.withAlpha((0.12 * 255).round()),
             borderRadius: BorderRadius.circular(12),
           ),
           child: Icon(icon, color: iconColor),
@@ -908,10 +938,7 @@ class SessionRow extends StatelessWidget {
             ],
           ),
         ),
-        StatusChip(
-          label: statusLabel,
-          color: statusColor,
-        ),
+        StatusChip(label: statusLabel, color: statusColor),
         const SizedBox(width: 8),
         IconButton(
           onPressed: onOpen,
@@ -927,18 +954,14 @@ class StatusChip extends StatelessWidget {
   final String label;
   final Color color;
 
-  const StatusChip({
-    super.key,
-    required this.label,
-    required this.color,
-  });
+  const StatusChip({super.key, required this.label, required this.color});
 
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
+        color: color.withAlpha((0.12 * 255).round()),
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
@@ -978,13 +1001,10 @@ class StatCard extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: iconColor.withOpacity(0.12),
+                color: iconColor.withAlpha((0.12 * 255).round()),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(
-                icon,
-                color: iconColor,
-              ),
+              child: Icon(icon, color: iconColor),
             ),
             const SizedBox(height: 12),
             Text(
@@ -997,10 +1017,7 @@ class StatCard extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               value,
-              style: const TextStyle(
-                fontWeight: FontWeight.w800,
-                fontSize: 26,
-              ),
+              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 26),
             ),
           ],
         ),
@@ -1062,9 +1079,7 @@ class MobileHomeShell extends StatelessWidget {
     return Scaffold(
       body: Navigator(
         onGenerateRoute: (settings) {
-          return MaterialPageRoute(
-            builder: (_) => MobileHomePage(data: data),
-          );
+          return MaterialPageRoute(builder: (_) => MobileHomePage(data: data));
         },
       ),
     );
@@ -1164,10 +1179,10 @@ class MobileHomePage extends StatelessWidget {
                     ),
                     const SizedBox(width: 8),
                     Icon(
-                      data.pcConnected
-                          ? Icons.check_circle
-                          : Icons.cancel,
-                      color: data.pcConnected ? Colors.lightGreenAccent : Colors.redAccent,
+                      data.pcConnected ? Icons.check_circle : Icons.cancel,
+                      color: data.pcConnected
+                          ? Colors.lightGreenAccent
+                          : Colors.redAccent,
                       size: 14,
                     ),
                     const SizedBox(width: 4),
@@ -1182,9 +1197,7 @@ class MobileHomePage extends StatelessWidget {
                   onTap: () {
                     Navigator.push(
                       context,
-                      MaterialPageRoute(
-                        builder: (_) => SettingsScreen(),
-                      ),
+                      MaterialPageRoute(builder: (_) => SettingsScreen()),
                     );
                   },
                   child: const Text(
@@ -1218,7 +1231,9 @@ class _PrimaryButton extends StatelessWidget {
           backgroundColor: Colors.white,
           foregroundColor: const Color(0xFF1D4ED8),
           padding: const EdgeInsets.symmetric(vertical: 14),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
         ),
         onPressed: onTap,
         child: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
@@ -1241,7 +1256,9 @@ class _SecondaryButton extends StatelessWidget {
           foregroundColor: Colors.white,
           side: const BorderSide(color: Colors.white70),
           padding: const EdgeInsets.symmetric(vertical: 14),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
         ),
         onPressed: onTap,
         child: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
@@ -1262,10 +1279,7 @@ class SessionHistoryScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Session History'),
         actions: [
-          TextButton(
-            onPressed: () {},
-            child: const Text('Export Session'),
-          )
+          TextButton(onPressed: () {}, child: const Text('Export Session')),
         ],
       ),
       body: ListView.builder(
@@ -1312,7 +1326,9 @@ class SessionHistoryScreen extends StatelessWidget {
                               const SizedBox(height: 4),
                               Text(
                                 session.dateTime,
-                                style: const TextStyle(color: Color(0xFF6B7280)),
+                                style: const TextStyle(
+                                  color: Color(0xFF6B7280),
+                                ),
                               ),
                             ],
                           ),
@@ -1337,7 +1353,7 @@ class SessionHistoryScreen extends StatelessWidget {
                     TextButton(
                       onPressed: () {},
                       child: const Text('View Details'),
-                    )
+                    ),
                   ],
                 ),
               ),
@@ -1351,9 +1367,7 @@ class SessionHistoryScreen extends StatelessWidget {
           onPressed: () {
             Navigator.push(
               context,
-              MaterialPageRoute(
-                builder: (_) => NewSessionFlow(data: data),
-              ),
+              MaterialPageRoute(builder: (_) => NewSessionFlow(data: data)),
             );
           },
           child: const Text('New Session'),
@@ -1431,8 +1445,9 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
     if (step < 4) {
       setState(() => step += 1);
     } else {
-      final sessionTitle =
-          _nameController.text.isEmpty ? 'New Session' : _nameController.text;
+      final sessionTitle = _nameController.text.isEmpty
+          ? 'New Session'
+          : _nameController.text;
       final navigator = Navigator.of(context);
       _pairingTransferred = true;
       _pairingSub?.cancel();
@@ -1486,9 +1501,7 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
           queryParameters: {'token': token, 'mode': mode},
         );
       } else if (uri.scheme == 'http' || uri.scheme == 'https') {
-        uri = uri.replace(
-          scheme: uri.scheme == 'https' ? 'wss' : 'ws',
-        );
+        uri = uri.replace(scheme: uri.scheme == 'https' ? 'wss' : 'ws');
       }
 
       _connectWebSocket(uri, mode: mode, token: token, raw: raw);
@@ -1520,42 +1533,48 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
     try {
       final channel = WebSocketChannel.connect(uri);
       _pairingChannel = channel;
-      _pairingSub = channel.stream.listen((event) {
-        if (!mounted) return;
-        setState(() {
-          pairingConnected = true;
-          pairingConnecting = false;
-          pairingStatus =
-              'Connected to ${uri.host.isNotEmpty ? uri.host : raw} (${mode.toUpperCase()})';
-        });
-      }, onError: (err) {
-        if (!mounted) return;
-        setState(() {
-          pairingConnecting = false;
-          pairingConnected = false;
-          pairingError = 'Connection error: $err';
-          pairingStatus = 'Not connected';
-        });
-      }, onDone: () {
-        if (!mounted) return;
-        setState(() {
-          pairingConnected = false;
-          pairingConnecting = false;
-          pairingStatus = 'Disconnected';
-        });
-      });
+      _pairingSub = channel.stream.listen(
+        (event) {
+          if (!mounted) return;
+          setState(() {
+            pairingConnected = true;
+            pairingConnecting = false;
+            pairingStatus =
+                'Connected to ${uri.host.isNotEmpty ? uri.host : raw} (${mode.toUpperCase()})';
+          });
+        },
+        onError: (err) {
+          if (!mounted) return;
+          setState(() {
+            pairingConnecting = false;
+            pairingConnected = false;
+            pairingError = 'Connection error: $err';
+            pairingStatus = 'Not connected';
+          });
+        },
+        onDone: () {
+          if (!mounted) return;
+          setState(() {
+            pairingConnected = false;
+            pairingConnecting = false;
+            pairingStatus = 'Disconnected';
+          });
+        },
+      );
 
       // Send a handshake payload.
-      channel.sink.add(jsonEncode({
-        'type': 'hello',
-        'device': 'mobile',
-        'mode': mode,
-        'token': token,
-        'session': _nameController.text.isEmpty
-            ? 'New Session'
-            : _nameController.text,
-        'timestamp': DateTime.now().toIso8601String(),
-      }));
+      channel.sink.add(
+        jsonEncode({
+          'type': 'hello',
+          'device': 'mobile',
+          'mode': mode,
+          'token': token,
+          'session': _nameController.text.isEmpty
+              ? 'New Session'
+              : _nameController.text,
+          'timestamp': DateTime.now().toIso8601String(),
+        }),
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -1623,9 +1642,7 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
           children: [
             _StepHeader(current: step, total: steps.length),
             const SizedBox(height: 12),
-            Expanded(
-              child: steps[step],
-            ),
+            Expanded(child: steps[step]),
             Row(
               children: [
                 Expanded(
@@ -1642,7 +1659,7 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
                   ),
                 ),
               ],
-            )
+            ),
           ],
         ),
       ),
@@ -1817,7 +1834,10 @@ class _CaptureSettingsStep extends StatelessWidget {
               border: OutlineInputBorder(),
             ),
             items: const [
-              DropdownMenuItem(value: 'JPG (Default)', child: Text('JPG (Default)')),
+              DropdownMenuItem(
+                value: 'JPG (Default)',
+                child: Text('JPG (Default)'),
+              ),
             ],
             onChanged: (_) {},
           ),
@@ -1905,8 +1925,14 @@ class _TempLoggingStep extends StatelessWidget {
                 border: OutlineInputBorder(),
               ),
               items: const [
-                DropdownMenuItem(value: 'Text prompt only', child: Text('Text prompt only')),
-                DropdownMenuItem(value: 'Voice prompt', child: Text('Voice prompt (optional)')),
+                DropdownMenuItem(
+                  value: 'Text prompt only',
+                  child: Text('Text prompt only'),
+                ),
+                DropdownMenuItem(
+                  value: 'Voice prompt',
+                  child: Text('Voice prompt (optional)'),
+                ),
               ],
               onChanged: (value) => onPromptTypeChanged(value ?? ''),
             ),
@@ -2032,7 +2058,7 @@ class _PairingStepState extends State<_PairingStep> {
                       child: Container(
                         decoration: BoxDecoration(
                           border: Border.all(
-                            color: Colors.white.withOpacity(0.6),
+                            color: Colors.white.withAlpha((0.6 * 255).round()),
                             width: 2,
                           ),
                         ),
@@ -2041,8 +2067,11 @@ class _PairingStepState extends State<_PairingStep> {
                   ),
                   if (!_handledScan)
                     const Center(
-                      child: Icon(Icons.qr_code_scanner,
-                          size: 72, color: Colors.white70),
+                      child: Icon(
+                        Icons.qr_code_scanner,
+                        size: 72,
+                        color: Colors.white70,
+                      ),
                     ),
                 ],
               ),
@@ -2120,7 +2149,7 @@ class _PairingStepState extends State<_PairingStep> {
               ),
             ),
           ],
-        )
+        ),
       ],
     );
   }
@@ -2217,11 +2246,7 @@ class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
     });
   }
 
-  void _toggleLock({
-    bool? exposure,
-    bool? focus,
-    bool? whiteBalance,
-  }) {
+  void _toggleLock({bool? exposure, bool? focus, bool? whiteBalance}) {
     setState(() {
       if (exposure != null) _exposureLocked = exposure;
       if (focus != null) _focusLocked = focus;
@@ -2230,24 +2255,33 @@ class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
 
     if (widget.pairingChannel != null) {
       try {
-        widget.pairingChannel!.sink.add(jsonEncode({
-          'type': 'lock_update',
-          'timestamp': DateTime.now().toIso8601String(),
-          'session': widget.sessionName,
-          'locks': {
-            'exposure': _exposureLocked,
-            'focus': _focusLocked,
-            'whiteBalance': _whiteBalanceLocked,
-          },
-        }));
+        widget.pairingChannel!.sink.add(
+          jsonEncode({
+            'type': 'lock_update',
+            'timestamp': DateTime.now().toIso8601String(),
+            'session': widget.sessionName,
+            'locks': {
+              'exposure': _exposureLocked,
+              'focus': _focusLocked,
+              'whiteBalance': _whiteBalanceLocked,
+            },
+          }),
+        );
       } catch (e) {
         debugPrint('Failed to send lock update: $e');
       }
     }
   }
 
-  void _handleResize(DragUpdateDetails details, Size size, RoiState state,
-      {bool left = false, bool right = false, bool top = false, bool bottom = false}) {
+  void _handleResize(
+    DragUpdateDetails details,
+    Size size,
+    RoiState state, {
+    bool left = false,
+    bool right = false,
+    bool top = false,
+    bool bottom = false,
+  }) {
     final current = _dragRect ?? state.normalizedRect;
     double l = current.left;
     double r = current.right;
@@ -2291,37 +2325,41 @@ class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
 
     if (widget.pairingChannel != null) {
       try {
-        widget.pairingChannel!.sink.add(jsonEncode({
-          'type': 'session_start',
-          'session': widget.sessionName,
-          'timestamp': DateTime.now().toIso8601String(),
-          'roi': {
-            'normalized': {
-              'left': state.normalizedRect.left,
-              'top': state.normalizedRect.top,
-              'width': state.normalizedRect.width,
-              'height': state.normalizedRect.height,
+        widget.pairingChannel!.sink.add(
+          jsonEncode({
+            'type': 'session_start',
+            'session': widget.sessionName,
+            'timestamp': DateTime.now().toIso8601String(),
+            'roi': {
+              'normalized': {
+                'left': state.normalizedRect.left,
+                'top': state.normalizedRect.top,
+                'width': state.normalizedRect.width,
+                'height': state.normalizedRect.height,
+              },
+              'pixels': {
+                'x': roiPixels.left,
+                'y': roiPixels.top,
+                'width': roiPixels.width,
+                'height': roiPixels.height,
+              },
+              'previewSize': {
+                'width': previewSize.width,
+                'height': previewSize.height,
+              },
             },
-            'pixels': {
-              'x': roiPixels.left,
-              'y': roiPixels.top,
-              'width': roiPixels.width,
-              'height': roiPixels.height,
+            'locks': {
+              'exposure': _exposureLocked,
+              'focus': _focusLocked,
+              'whiteBalance': _whiteBalanceLocked,
             },
-            'previewSize': {
-              'width': previewSize.width,
-              'height': previewSize.height,
-            },
-          },
-          'locks': {
-            'exposure': _exposureLocked,
-            'focus': _focusLocked,
-            'whiteBalance': _whiteBalanceLocked,
-          },
-        }));
+          }),
+        );
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Session started and sent to desktop')),
+            const SnackBar(
+              content: Text('Session started and sent to desktop'),
+            ),
           );
         }
       } catch (e) {
@@ -2334,7 +2372,9 @@ class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
     } else {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Starting locally (no desktop pairing)')),
+          const SnackBar(
+            content: Text('Starting locally (no desktop pairing)'),
+          ),
         );
       }
     }
@@ -2347,16 +2387,30 @@ class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
     }
   }
 
-  Widget _handleAt(Offset position, Size size, RoiState state,
-      {bool left = false, bool right = false, bool top = false, bool bottom = false}) {
+  Widget _handleAt(
+    Offset position,
+    Size size,
+    RoiState state, {
+    bool left = false,
+    bool right = false,
+    bool top = false,
+    bool bottom = false,
+  }) {
     const double handleSize = 18;
     return Positioned(
       left: position.dx - handleSize / 2,
       top: position.dy - handleSize / 2,
       child: GestureDetector(
         behavior: HitTestBehavior.translucent,
-        onPanUpdate: (details) =>
-            _handleResize(details, size, state, left: left, right: right, top: top, bottom: bottom),
+        onPanUpdate: (details) => _handleResize(
+          details,
+          size,
+          state,
+          left: left,
+          right: right,
+          top: top,
+          bottom: bottom,
+        ),
         child: Container(
           width: handleSize,
           height: handleSize,
@@ -2390,7 +2444,10 @@ class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
                 borderRadius: BorderRadius.circular(16),
                 child: LayoutBuilder(
                   builder: (context, constraints) {
-                    final size = Size(constraints.maxWidth, constraints.maxHeight);
+                    final size = Size(
+                      constraints.maxWidth,
+                      constraints.maxHeight,
+                    );
                     WidgetsBinding.instance.addPostFrameCallback((_) {
                       if (!mounted) return;
                       if (_lastPreviewSize == size) return;
@@ -2414,7 +2471,7 @@ class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
                         ),
                         Positioned.fill(
                           child: Container(
-                            color: Colors.black.withOpacity(0.15),
+                            color: Colors.black.withAlpha((0.15 * 255).round()),
                           ),
                         ),
                         Positioned(
@@ -2423,28 +2480,55 @@ class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
                           width: roiPixels.width,
                           height: roiPixels.height,
                           child: GestureDetector(
-                            onPanUpdate: (details) => _handleMove(details, size, roiState),
+                            onPanUpdate: (details) =>
+                                _handleMove(details, size, roiState),
                             child: Container(
                               decoration: BoxDecoration(
-                                border: Border.all(color: Colors.blueAccent, width: 3),
-                                color: Colors.white.withOpacity(0.08),
+                                border: Border.all(
+                                  color: Colors.blueAccent,
+                                  width: 3,
+                                ),
+                                color: Colors.white.withAlpha((0.08 * 255).round()),
                               ),
                             ),
                           ),
                         ),
-                        _handleAt(roiPixels.topLeft, size, roiState,
-                            left: true, top: true),
-                        _handleAt(roiPixels.topRight, size, roiState,
-                            right: true, top: true),
-                        _handleAt(roiPixels.bottomLeft, size, roiState,
-                            left: true, bottom: true),
-                        _handleAt(roiPixels.bottomRight, size, roiState,
-                            right: true, bottom: true),
+                        _handleAt(
+                          roiPixels.topLeft,
+                          size,
+                          roiState,
+                          left: true,
+                          top: true,
+                        ),
+                        _handleAt(
+                          roiPixels.topRight,
+                          size,
+                          roiState,
+                          right: true,
+                          top: true,
+                        ),
+                        _handleAt(
+                          roiPixels.bottomLeft,
+                          size,
+                          roiState,
+                          left: true,
+                          bottom: true,
+                        ),
+                        _handleAt(
+                          roiPixels.bottomRight,
+                          size,
+                          roiState,
+                          right: true,
+                          bottom: true,
+                        ),
                         Positioned(
                           top: 12,
                           left: 12,
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
                             decoration: BoxDecoration(
                               color: Colors.black.withOpacity(0.6),
                               borderRadius: BorderRadius.circular(8),
@@ -2454,7 +2538,10 @@ class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
                               children: [
                                 Text(
                                   'ROI ${roiPixels.width.toStringAsFixed(0)} x ${roiPixels.height.toStringAsFixed(0)} px',
-                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                  ),
                                 ),
                                 Text(
                                   'x:${roiPixels.left.toStringAsFixed(0)}  y:${roiPixels.top.toStringAsFixed(0)}',
@@ -2484,10 +2571,15 @@ class _CameraAlignmentScreenState extends State<CameraAlignmentScreen> {
                           left: 12,
                           child: Row(
                             children: [
-                              const Icon(Icons.brightness_6, color: Colors.white70),
+                              const Icon(
+                                Icons.brightness_6,
+                                color: Colors.white70,
+                              ),
                               const SizedBox(width: 6),
                               Text(
-                                _exposureLocked ? 'Exposure locked' : 'Brightness OK',
+                                _exposureLocked
+                                    ? 'Exposure locked'
+                                    : 'Brightness OK',
                                 style: const TextStyle(color: Colors.white70),
                               ),
                             ],
@@ -2608,8 +2700,13 @@ class CaptureStatus {
   final int captured;
   final int pending;
   final int uploaded;
-  const CaptureStatus({required this.captured, required this.pending, required this.uploaded});
-  factory CaptureStatus.zero() => const CaptureStatus(captured: 0, pending: 0, uploaded: 0);
+  const CaptureStatus({
+    required this.captured,
+    required this.pending,
+    required this.uploaded,
+  });
+  factory CaptureStatus.zero() =>
+      const CaptureStatus(captured: 0, pending: 0, uploaded: 0);
 }
 
 class ActiveCaptureScreen extends StatefulWidget {
@@ -2784,7 +2881,9 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
     final normalized = roiState.normalizedRect;
     final controller = _sessionCameraController;
 
-    if (_livePreviewSupported && controller != null && controller.value.isInitialized) {
+    if (_livePreviewSupported &&
+        controller != null &&
+        controller.value.isInitialized) {
       try {
         final file = await controller.takePicture();
         final bytes = await file.readAsBytes();
@@ -2805,9 +2904,10 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
           Paint(),
         );
 
-        final cropped = await recorder
-            .endRecording()
-            .toImage(max(1, roiRect.width.round()), max(1, roiRect.height.round()));
+        final cropped = await recorder.endRecording().toImage(
+          max(1, roiRect.width.round()),
+          max(1, roiRect.height.round()),
+        );
         final data = await cropped.toByteData(format: ImageByteFormat.png);
         if (data != null) {
           return data.buffer.asUint8List();
@@ -2834,20 +2934,25 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
     );
     canvas.drawRect(
       fallbackRoi,
-      Paint()..color = Colors.white.withOpacity(0.2),
+      Paint()..color = Colors.white.withAlpha((0.2 * 255).round()),
     );
     canvas.drawRRect(
       RRect.fromRectAndRadius(fallbackRoi, const Radius.circular(8)),
       Paint()
-        ..color = Colors.white.withOpacity(0.4)
+        ..color = Colors.white.withAlpha((0.4 * 255).round())
         ..style = PaintingStyle.stroke
         ..strokeWidth = 4,
     );
 
     final label = TextPainter(
       text: TextSpan(
-        text: '${fallbackRoi.width.toStringAsFixed(0)} x ${fallbackRoi.height.toStringAsFixed(0)} @ (${fallbackRoi.left.toStringAsFixed(0)}, ${fallbackRoi.top.toStringAsFixed(0)})',
-        style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+        text:
+            '${fallbackRoi.width.toStringAsFixed(0)} x ${fallbackRoi.height.toStringAsFixed(0)} @ (${fallbackRoi.left.toStringAsFixed(0)}, ${fallbackRoi.top.toStringAsFixed(0)})',
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+        ),
       ),
       textDirection: TextDirection.ltr,
     )..layout(maxWidth: width - 24);
@@ -2879,7 +2984,9 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
     if (entered == null || entered.trim().isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Temperature required before sending frames.')),
+          const SnackBar(
+            content: Text('Temperature required before sending frames.'),
+          ),
         );
       }
       return;
@@ -2890,11 +2997,13 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
     });
     _updateMonitorStatus();
     if (widget.pairingChannel != null) {
-      widget.pairingChannel?.sink.add(jsonEncode({
-        'type': 'temperature',
-        'value': entered.trim(),
-        'timestamp': DateTime.now().toIso8601String(),
-      }));
+      widget.pairingChannel?.sink.add(
+        jsonEncode({
+          'type': 'temperature',
+          'value': entered.trim(),
+          'timestamp': DateTime.now().toIso8601String(),
+        }),
+      );
     }
     _flushQueue();
   }
@@ -2940,7 +3049,10 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
     });
   }
 
-  Future<void> _sendCaptureToDesktop(Map<String, dynamic> payload, {Rect? roiPixels}) async {
+  Future<void> _sendCaptureToDesktop(
+    Map<String, dynamic> payload, {
+    Rect? roiPixels,
+  }) async {
     try {
       widget.pairingChannel?.sink.add(jsonEncode(payload));
       if (!mounted) return;
@@ -2956,9 +3068,9 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to send capture: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to send capture: $e')));
     }
   }
 
@@ -2979,7 +3091,8 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
     }
     return WillPopScope(
       onWillPop: () async {
-        final proceed = await showDialog<bool>(
+        final proceed =
+            await showDialog<bool>(
               context: context,
               builder: (ctx) => AlertDialog(
                 title: const Text('Session running'),
@@ -2987,8 +3100,14 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                   'Stop the session before leaving to avoid losing queued captures.',
                 ),
                 actions: [
-                  TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Stay')),
-                  TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('End Anyway')),
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text('Stay'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: const Text('End Anyway'),
+                  ),
                 ],
               ),
             ) ??
@@ -3003,7 +3122,8 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
               onPressed: () => Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => UploadQueueScreen(status: widget.status, items: const []),
+                  builder: (_) =>
+                      UploadQueueScreen(status: widget.status, items: const []),
                 ),
               ),
               icon: const Icon(Icons.cloud_upload_outlined),
@@ -3017,14 +3137,19 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
             children: [
               Row(
                 children: [
-                  Icon(Icons.circle, color: connected ? Colors.green : Colors.red, size: 12),
+                  Icon(
+                    Icons.circle,
+                    color: connected ? Colors.green : Colors.red,
+                    size: 12,
+                  ),
                   const SizedBox(width: 6),
                   Text(connected ? 'Connected to desktop' : 'Not connected'),
                   const Spacer(),
                   Row(
                     children: [
                       IconButton(
-                        onPressed: () => setState(() => _mutePrompts = !_mutePrompts),
+                        onPressed: () =>
+                            setState(() => _mutePrompts = !_mutePrompts),
                         icon: Icon(_mutePrompts ? Icons.mic_off : Icons.mic),
                       ),
                       const Text('00:00:00'),
@@ -3038,7 +3163,10 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                   borderRadius: BorderRadius.circular(16),
                   child: LayoutBuilder(
                     builder: (context, constraints) {
-                      final size = Size(constraints.maxWidth, constraints.maxHeight);
+                      final size = Size(
+                        constraints.maxWidth,
+                        constraints.maxHeight,
+                      );
                       WidgetsBinding.instance.addPostFrameCallback((_) {
                         if (!mounted) return;
                         if (_lastPreviewSize == size) return;
@@ -3046,101 +3174,121 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                         roiState.updatePreviewSize(size);
                       });
                       final roiPixels = roiState.pixelRectFor(size);
-              return RepaintBoundary(
-                key: _roiPreviewKey,
-                child: ValueListenableBuilder<PairingServerState>(
-                  valueListenable: PairingHost.instance.state,
-                  builder: (context, pairingState, _) {
-                    final background = _livePreviewSupported
-                        ? FutureBuilder<void>(
-                            future: _cameraInitFuture,
-                            builder: (context, snapshot) {
-                              if (snapshot.connectionState == ConnectionState.waiting) {
-                                return const Center(child: CircularProgressIndicator());
-                              }
-                              if (_cameraInitFailed || _sessionCameraController == null) {
-                                return _buildGradientPlaceholder();
-                              }
-                              return CameraPreview(_sessionCameraController!);
-                            },
-                          )
-                        : pairingState.lastFrameBytes != null
-                            ? Image.memory(
-                                pairingState.lastFrameBytes!,
-                                fit: BoxFit.cover,
-                                gaplessPlayback: true,
-                                width: size.width,
-                                height: size.height,
-                              )
-                            : _buildGradientPlaceholder();
+                      return RepaintBoundary(
+                        key: _roiPreviewKey,
+                        child: ValueListenableBuilder<PairingServerState>(
+                          valueListenable: PairingHost.instance.state,
+                          builder: (context, pairingState, _) {
+                            final background = _livePreviewSupported
+                                ? FutureBuilder<void>(
+                                    future: _cameraInitFuture,
+                                    builder: (context, snapshot) {
+                                      if (snapshot.connectionState ==
+                                          ConnectionState.waiting) {
+                                        return const Center(
+                                          child: CircularProgressIndicator(),
+                                        );
+                                      }
+                                      if (_cameraInitFailed ||
+                                          _sessionCameraController == null) {
+                                        return _buildGradientPlaceholder();
+                                      }
+                                      return CameraPreview(
+                                        _sessionCameraController!,
+                                      );
+                                    },
+                                  )
+                                : pairingState.lastFrameBytes != null
+                                ? Image.memory(
+                                    pairingState.lastFrameBytes!,
+                                    fit: BoxFit.cover,
+                                    gaplessPlayback: true,
+                                    width: size.width,
+                                    height: size.height,
+                                  )
+                                : _buildGradientPlaceholder();
 
-                    return Stack(
-                      children: [
-                        Positioned.fill(child: background),
-                        Positioned(
-                          left: roiPixels.left,
-                          top: roiPixels.top,
-                          width: roiPixels.width,
-                          height: roiPixels.height,
-                          child: Container(
-                            decoration: BoxDecoration(
-                              border: Border.all(color: Colors.blueAccent, width: 3),
-                              color: Colors.white.withOpacity(0.05),
-                            ),
-                          ),
-                        ),
-                        Positioned(
-                          top: 12,
-                          right: 12,
-                          child: Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.6),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                            return Stack(
                               children: [
-                                Text(
-                                  'ROI ${roiPixels.width.toStringAsFixed(0)}x${roiPixels.height.toStringAsFixed(0)}',
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
+                                Positioned.fill(child: background),
+                                Positioned(
+                                  left: roiPixels.left,
+                                  top: roiPixels.top,
+                                  width: roiPixels.width,
+                                  height: roiPixels.height,
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      border: Border.all(
+                                        color: Colors.blueAccent,
+                                        width: 3,
+                                      ),
+                                      color: Colors.white.withAlpha((0.05 * 255).round()),
+                                    ),
                                   ),
                                 ),
-                                Text(
-                                  'x:${roiPixels.left.toStringAsFixed(0)} y:${roiPixels.top.toStringAsFixed(0)}',
-                                  style: const TextStyle(color: Colors.white70),
+                                Positioned(
+                                  top: 12,
+                                  right: 12,
+                                  child: Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: Colors.black.withAlpha((0.6 * 255).round()),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'ROI ${roiPixels.width.toStringAsFixed(0)}x${roiPixels.height.toStringAsFixed(0)}',
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                        Text(
+                                          'x:${roiPixels.left.toStringAsFixed(0)} y:${roiPixels.top.toStringAsFixed(0)}',
+                                          style: const TextStyle(
+                                            color: Colors.white70,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 ),
                               ],
-                            ),
-                          ),
+                            );
+                          },
                         ),
-                      ],
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
-              );
-            },
-          ),
-        ),
               ),
               const SizedBox(height: 12),
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: _temperatureLocked ? const Color(0xFFF0FDF4) : const Color(0xFFFFF7ED),
+                  color: _temperatureLocked
+                      ? const Color(0xFFF0FDF4)
+                      : const Color(0xFFFFF7ED),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                    color: _temperatureLocked ? const Color(0xFF22C55E) : const Color(0xFFF97316),
+                    color: _temperatureLocked
+                        ? const Color(0xFF22C55E)
+                        : const Color(0xFFF97316),
                   ),
                 ),
                 child: Row(
                   children: [
                     Icon(
-                      _temperatureLocked ? Icons.thermostat : Icons.warning_amber_rounded,
-                      color: _temperatureLocked ? const Color(0xFF16A34A) : const Color(0xFFD97706),
+                      _temperatureLocked
+                          ? Icons.thermostat
+                          : Icons.warning_amber_rounded,
+                      color: _temperatureLocked
+                          ? const Color(0xFF16A34A)
+                          : const Color(0xFFD97706),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -3164,7 +3312,9 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                     const SizedBox(width: 12),
                     ElevatedButton(
                       onPressed: _promptTemperature,
-                      child: Text(_temperatureLocked ? 'Update Temp' : 'Enter Temp'),
+                      child: Text(
+                        _temperatureLocked ? 'Update Temp' : 'Enter Temp',
+                      ),
                     ),
                   ],
                 ),
@@ -3175,8 +3325,9 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                 runSpacing: 8,
                 children: [
                   ElevatedButton.icon(
-                    onPressed:
-                        connected && _temperatureLocked ? () => _sendCapture(roiState) : null,
+                    onPressed: connected && _temperatureLocked
+                        ? () => _sendCapture(roiState)
+                        : null,
                     icon: const Icon(Icons.camera_alt_outlined),
                     label: const Text('Capture Now'),
                   ),
@@ -3238,9 +3389,15 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    _UploadStat(label: 'Captured', value: widget.status.captured),
+                    _UploadStat(
+                      label: 'Captured',
+                      value: widget.status.captured,
+                    ),
                     _UploadStat(label: 'Pending', value: widget.status.pending),
-                    _UploadStat(label: 'Uploaded', value: widget.status.uploaded),
+                    _UploadStat(
+                      label: 'Uploaded',
+                      value: widget.status.uploaded,
+                    ),
                     TextButton(
                       onPressed: () {
                         Navigator.push(
@@ -3274,7 +3431,8 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => SessionSummaryScreen(status: widget.status),
+                            builder: (_) =>
+                                SessionSummaryScreen(status: widget.status),
                           ),
                         );
                       },
@@ -3341,7 +3499,11 @@ class _MonitorStatus {
     required this.queuedFrames,
   });
 
-  _MonitorStatus copyWith({bool? connected, bool? temperatureLocked, int? queuedFrames}) {
+  _MonitorStatus copyWith({
+    bool? connected,
+    bool? temperatureLocked,
+    int? queuedFrames,
+  }) {
     return _MonitorStatus(
       connected: connected ?? this.connected,
       temperatureLocked: temperatureLocked ?? this.temperatureLocked,
@@ -3365,10 +3527,10 @@ class _MonitorStatusChip extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
+        decoration: BoxDecoration(
+        color: color.withAlpha((0.12 * 255).round()),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.4)),
+        border: Border.all(color: color.withAlpha((0.4 * 255).round())),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -3514,8 +3676,9 @@ class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
                             label: status.connected
                                 ? 'Desktop link ready'
                                 : 'Desktop offline',
-                            color:
-                                status.connected ? const Color(0xFF16A34A) : const Color(0xFFF97316),
+                            color: status.connected
+                                ? const Color(0xFF16A34A)
+                                : const Color(0xFFF97316),
                           ),
                           _MonitorStatusChip(
                             icon: status.temperatureLocked
@@ -3576,7 +3739,7 @@ class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
                         const Text(
                           'seconds',
                           style: TextStyle(color: Colors.white70, fontSize: 16),
-                        )
+                        ),
                       ],
                     ),
                     const SizedBox(height: 4),
@@ -3596,7 +3759,9 @@ class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
                         Expanded(
                           child: OutlinedButton.icon(
                             onPressed: _toggleRunning,
-                            icon: Icon(_running ? Icons.pause : Icons.play_arrow),
+                            icon: Icon(
+                              _running ? Icons.pause : Icons.play_arrow,
+                            ),
                             label: Text(
                               _running ? 'Pause countdown' : 'Resume countdown',
                               overflow: TextOverflow.ellipsis,
@@ -3662,7 +3827,9 @@ class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
                                     const SizedBox(height: 4),
                                     Text(
                                       photo.summary,
-                                      style: const TextStyle(color: Color(0xFF475569)),
+                                      style: const TextStyle(
+                                        color: Color(0xFF475569),
+                                      ),
                                     ),
                                   ],
                                 ),
@@ -3718,7 +3885,9 @@ class _TemperatureEntryScreenState extends State<TemperatureEntryScreen> {
                 border: OutlineInputBorder(),
               ),
               readOnly: true,
-              controller: TextEditingController(text: DateTime.now().toString()),
+              controller: TextEditingController(
+                text: DateTime.now().toString(),
+              ),
             ),
             const SizedBox(height: 12),
             TextField(
@@ -3733,8 +3902,12 @@ class _TemperatureEntryScreenState extends State<TemperatureEntryScreen> {
             SwitchListTile(
               value: _muteVoice,
               onChanged: (value) => setState(() => _muteVoice = value),
-              title: const Text('Silence voice prompts while entering temperature'),
-              secondary: Icon(_muteVoice ? Icons.volume_off : Icons.volume_up_outlined),
+              title: const Text(
+                'Silence voice prompts while entering temperature',
+              ),
+              secondary: Icon(
+                _muteVoice ? Icons.volume_off : Icons.volume_up_outlined,
+              ),
             ),
             Row(
               children: [
@@ -3747,12 +3920,13 @@ class _TemperatureEntryScreenState extends State<TemperatureEntryScreen> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: () => Navigator.pop(context, _tempController.text),
+                    onPressed: () =>
+                        Navigator.pop(context, _tempController.text),
                     child: const Text('Save'),
                   ),
                 ),
               ],
-            )
+            ),
           ],
         ),
       ),
@@ -3764,7 +3938,11 @@ class UploadQueueScreen extends StatelessWidget {
   final CaptureStatus status;
   final List<UploadItem> items;
 
-  const UploadQueueScreen({super.key, required this.status, required this.items});
+  const UploadQueueScreen({
+    super.key,
+    required this.status,
+    required this.items,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -3797,8 +3975,13 @@ class UploadQueueScreen extends StatelessWidget {
               color: _badgeColor(item.status),
             ),
             title: Text(item.fileName),
-            subtitle: Text('Captured: ${item.capturedAt} • Retries: ${item.retries}'),
-            trailing: StatusChip(label: item.status, color: _badgeColor(item.status)),
+            subtitle: Text(
+              'Captured: ${item.capturedAt} • Retries: ${item.retries}',
+            ),
+            trailing: StatusChip(
+              label: item.status,
+              color: _badgeColor(item.status),
+            ),
             onTap: () {},
           );
         },
@@ -3842,7 +4025,10 @@ class SessionSummaryScreen extends StatelessWidget {
           children: [
             _SummaryCard(title: 'Total images', value: status.captured),
             _SummaryCard(title: 'Temp entries', value: 0),
-            _SummaryCard(title: 'Upload completeness', value: '${status.uploaded}/${status.captured}'),
+            _SummaryCard(
+              title: 'Upload completeness',
+              value: '${status.uploaded}/${status.captured}',
+            ),
             const _SummaryCard(title: 'Notes', value: 'None'),
             const Spacer(),
             Row(
@@ -3945,10 +4131,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             title: const Text('Debug logs'),
             trailing: Switch(value: false, onChanged: (_) {}),
           ),
-          ListTile(
-            title: const Text('Reset all settings'),
-            onTap: () {},
-          ),
+          ListTile(title: const Text('Reset all settings'), onTap: () {}),
         ],
       ),
     );
@@ -4224,7 +4407,11 @@ class _PairingCardState extends State<PairingCard> {
     super.dispose();
   }
 
-  void _showFramePreview(BuildContext context, Uint8List bytes, {String? summary}) {
+  void _showFramePreview(
+    BuildContext context,
+    Uint8List bytes, {
+    String? summary,
+  }) {
     showDialog(
       context: context,
       builder: (ctx) {
@@ -4236,7 +4423,9 @@ class _PairingCardState extends State<PairingCard> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 ClipRRect(
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(12),
+                  ),
                   child: Container(
                     color: const Color(0xFF0B1220),
                     child: AspectRatio(
@@ -4253,7 +4442,10 @@ class _PairingCardState extends State<PairingCard> {
                 ),
                 if (summary != null) ...[
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
                     child: Text(
                       summary,
                       style: const TextStyle(
@@ -4281,7 +4473,10 @@ class _PairingCardState extends State<PairingCard> {
     );
   }
 
-  Future<void> _openProjectWindow(BuildContext context, PairingServerState state) async {
+  Future<void> _openProjectWindow(
+    BuildContext context,
+    PairingServerState state,
+  ) async {
     final scrollController = ScrollController();
 
     await showDialog(
@@ -4371,13 +4566,17 @@ class _PairingCardState extends State<PairingCard> {
                                   const SizedBox(height: 14),
                                   Text(
                                     'Status: ${state.status}',
-                                    style: const TextStyle(fontWeight: FontWeight.w700),
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                    ),
                                   ),
-                                  if (state.lastTemperature != null || !state.temperatureLocked)
+                                  if (state.lastTemperature != null ||
+                                      !state.temperatureLocked)
                                     Padding(
                                       padding: const EdgeInsets.only(top: 8),
                                       child: Row(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
                                           Icon(
                                             state.temperatureLocked
@@ -4393,7 +4592,9 @@ class _PairingCardState extends State<PairingCard> {
                                               state.temperatureLocked
                                                   ? 'Temperature locked at ${state.lastTemperature ?? '--'}'
                                                   : 'Awaiting temperature entry from phone before accepting images',
-                                              style: const TextStyle(color: Color(0xFF4B5563)),
+                                              style: const TextStyle(
+                                                color: Color(0xFF4B5563),
+                                              ),
                                             ),
                                           ),
                                         ],
@@ -4403,7 +4604,8 @@ class _PairingCardState extends State<PairingCard> {
                                     Padding(
                                       padding: const EdgeInsets.only(top: 10),
                                       child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
                                           const Text(
                                             'Last message',
@@ -4417,12 +4619,17 @@ class _PairingCardState extends State<PairingCard> {
                                             padding: const EdgeInsets.all(10),
                                             decoration: BoxDecoration(
                                               color: const Color(0xFFF3F4F6),
-                                              borderRadius: BorderRadius.circular(12),
-                                              border: Border.all(color: const Color(0xFFE5E7EB)),
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              border: Border.all(
+                                                color: const Color(0xFFE5E7EB),
+                                              ),
                                             ),
                                             child: Text(
                                               state.lastMessage!,
-                                              style: const TextStyle(color: Color(0xFF6B7280)),
+                                              style: const TextStyle(
+                                                color: Color(0xFF6B7280),
+                                              ),
                                             ),
                                           ),
                                         ],
@@ -4456,7 +4663,10 @@ class _PairingCardState extends State<PairingCard> {
                                   child: Container(
                                     decoration: const BoxDecoration(
                                       gradient: LinearGradient(
-                                        colors: [Color(0xFF0EA5E9), Color(0xFF1D4ED8)],
+                                        colors: [
+                                          Color(0xFF0EA5E9),
+                                          Color(0xFF1D4ED8),
+                                        ],
                                         begin: Alignment.topLeft,
                                         end: Alignment.bottomRight,
                                       ),
@@ -4487,18 +4697,23 @@ class _PairingCardState extends State<PairingCard> {
                               const SizedBox(height: 10),
                               Row(
                                 children: [
-                                  const Icon(Icons.open_in_full, color: Color(0xFF6B7280)),
+                                  const Icon(
+                                    Icons.open_in_full,
+                                    color: Color(0xFF6B7280),
+                                  ),
                                   const SizedBox(width: 8),
                                   Expanded(
                                     child: Text(
                                       state.lastFrameBytes != null
                                           ? 'Use pinch or mouse wheel to inspect the latest ROI image.'
                                           : 'Waiting for the first ROI image from the handset.',
-                                      style: const TextStyle(color: Color(0xFF6B7280)),
+                                      style: const TextStyle(
+                                        color: Color(0xFF6B7280),
+                                      ),
                                     ),
                                   ),
                                 ],
-                              )
+                              ),
                             ],
                           ),
                         ),
@@ -4508,9 +4723,10 @@ class _PairingCardState extends State<PairingCard> {
                 ],
               ),
             ),
-          );
-        },
-      );
+          ),
+        );
+      },
+    );
 
     scrollController.dispose();
   }
@@ -4609,13 +4825,18 @@ class _PairingCardState extends State<PairingCard> {
                 'Status: ${state.status}',
                 style: const TextStyle(fontWeight: FontWeight.w700),
               ),
-              if (state.lastTemperature != null || !state.temperatureLocked) ...[
+              if (state.lastTemperature != null ||
+                  !state.temperatureLocked) ...[
                 const SizedBox(height: 6),
                 Row(
                   children: [
                     Icon(
-                      state.temperatureLocked ? Icons.thermostat : Icons.hourglass_bottom,
-                      color: state.temperatureLocked ? Colors.orange : Colors.red,
+                      state.temperatureLocked
+                          ? Icons.thermostat
+                          : Icons.hourglass_bottom,
+                      color: state.temperatureLocked
+                          ? Colors.orange
+                          : Colors.red,
                     ),
                     const SizedBox(width: 8),
                     Expanded(
@@ -4633,7 +4854,10 @@ class _PairingCardState extends State<PairingCard> {
                 const SizedBox(height: 6),
                 const Text(
                   'Last message:',
-                  style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF4B5563)),
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF4B5563),
+                  ),
                 ),
                 const SizedBox(height: 4),
                 Container(
@@ -4660,8 +4884,11 @@ class _PairingCardState extends State<PairingCard> {
               if (state.lastFrameBytes != null) ...[
                 const SizedBox(height: 8),
                 GestureDetector(
-                  onTap: () => _showFramePreview(context, state.lastFrameBytes!,
-                      summary: state.lastFrameSummary),
+                  onTap: () => _showFramePreview(
+                    context,
+                    state.lastFrameBytes!,
+                    summary: state.lastFrameSummary,
+                  ),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(12),
                     child: Container(
@@ -4687,7 +4914,10 @@ class _PairingCardState extends State<PairingCard> {
                 const SizedBox(height: 6),
                 Text(
                   'Last ROI frame: ${state.lastFrameSummary}',
-                  style: const TextStyle(color: Color(0xFF0F172A), fontWeight: FontWeight.w600),
+                  style: const TextStyle(
+                    color: Color(0xFF0F172A),
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ],
               if (state.lastFrameBytes != null && state.temperatureLocked) ...[
@@ -4695,14 +4925,20 @@ class _PairingCardState extends State<PairingCard> {
                 ElevatedButton.icon(
                   onPressed: () {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Evaluation pipeline will run here (OpenCV stub).')),
+                      const SnackBar(
+                        content: Text(
+                          'Evaluation pipeline will run here (OpenCV stub).',
+                        ),
+                      ),
                     );
                   },
                   icon: const Icon(Icons.play_arrow),
                   label: const Text('Start Evaluating'),
-                  style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(44)),
+                  style: ElevatedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(44),
+                  ),
                 ),
-              ]
+              ],
             ],
           ),
         );
@@ -4768,18 +5004,20 @@ class PairingHost {
   static final PairingHost instance = PairingHost._internal();
 
   final ValueNotifier<PairingServerState> state =
-      ValueNotifier<PairingServerState>(const PairingServerState(
-    running: false,
-    connected: false,
-    status: 'Not started',
-    qrData: null,
-    displayHost: '',
-    lastMessage: null,
-    lastFrameSummary: null,
-    lastFrameBytes: null,
-    lastTemperature: null,
-    temperatureLocked: false,
-  ));
+      ValueNotifier<PairingServerState>(
+        const PairingServerState(
+          running: false,
+          connected: false,
+          status: 'Not started',
+          qrData: null,
+          displayHost: '',
+          lastMessage: null,
+          lastFrameSummary: null,
+          lastFrameBytes: null,
+          lastTemperature: null,
+          temperatureLocked: false,
+        ),
+      );
 
   HttpServer? _server;
   WebSocket? _client;
@@ -4797,8 +5035,8 @@ class PairingHost {
     if (value is num) {
       return value.toStringAsFixed(0);
     }
-
-    
+    return value?.toString() ?? '?';
+  }
 
   void _forwardForAnalysis(Uint8List bytes) {
     // Placeholder for downstream analysis module integration.
@@ -4822,64 +5060,73 @@ class PairingHost {
       _client = socket;
       state.value = state.value.copyWith(
         connected: true,
-        status: 'Paired with ${request.connectionInfo?.remoteAddress.address ?? 'device'}',
+        status:
+            'Paired with ${request.connectionInfo?.remoteAddress.address ?? 'device'}',
       );
-      socket.listen((data) {
-        final raw = data?.toString();
-        try {
-          final payload = jsonDecode(raw ?? '');
-          if (payload is Map && payload['type'] == 'frame') {
-            final roi = payload['roi'] as Map?;
-            final pixels = roi?['pixels'] as Map?;
-            Uint8List? frameBytes;
-            final frameStr = payload['frame'];
-            if (frameStr is String) {
-              try {
-                frameBytes = base64Decode(frameStr);
-              } catch (_) {}
+      socket.listen(
+        (data) {
+          final raw = data?.toString();
+          try {
+            final payload = jsonDecode(raw ?? '');
+            if (payload is Map && payload['type'] == 'frame') {
+              final roi = payload['roi'] as Map?;
+              final pixels = roi?['pixels'] as Map?;
+              Uint8List? frameBytes;
+              final frameStr = payload['frame'];
+              if (frameStr is String) {
+                try {
+                  frameBytes = base64Decode(frameStr);
+                } catch (_) {}
+              }
+              final summary = pixels != null
+                  ? 'ROI ${_fmtNum(pixels['width'])}x${_fmtNum(pixels['height'])} at (${_fmtNum(pixels['x'])}, ${_fmtNum(pixels['y'])})'
+                  : 'ROI frame received';
+              state.value = state.value.copyWith(
+                lastMessage: raw,
+                lastFrameSummary: summary,
+                lastFrameBytes: frameBytes ?? state.value.lastFrameBytes,
+              );
+              if (frameBytes != null) {
+                _forwardForAnalysis(frameBytes);
+              }
+              return;
             }
-            final summary = pixels != null
-                ? 'ROI ${_fmtNum(pixels['width'])}x${_fmtNum(pixels['height'])} at (${_fmtNum(pixels['x'])}, ${_fmtNum(pixels['y'])})'
-                : 'ROI frame received';
-            state.value = state.value.copyWith(
-              lastMessage: raw,
-              lastFrameSummary: summary,
-              lastFrameBytes: frameBytes ?? state.value.lastFrameBytes,
-            );
-            if (frameBytes != null) {
-              _forwardForAnalysis(frameBytes);
+            if (payload is Map && payload['type'] == 'temperature') {
+              final value = payload['value']?.toString();
+              state.value = state.value.copyWith(
+                lastMessage: raw,
+                lastTemperature: value,
+                temperatureLocked: true,
+                status: 'Temperature locked at ${value ?? '--'}',
+              );
+              return;
             }
-            return;
-          }
-          if (payload is Map && payload['type'] == 'temperature') {
-            final value = payload['value']?.toString();
-            state.value = state.value.copyWith(
-              lastMessage: raw,
-              lastTemperature: value,
-              temperatureLocked: true,
-              status: 'Temperature locked at ${value ?? '--'}',
-            );
-            return;
-          }
-          if (payload is Map && payload['type'] == 'session_start') {
-            state.value = state.value.copyWith(
-              lastMessage: raw,
-              status: 'Session ${payload['session'] ?? ''} ready',
-            );
-            return;
-          }
-        } catch (_) {}
-        state.value = state.value.copyWith(lastMessage: raw);
-      }, onDone: () {
-        state.value = state.value
-            .copyWith(connected: false, status: 'Disconnected', lastFrameSummary: null);
-      });
-      socket.add(jsonEncode({
-        'type': 'ack',
-        'status': 'connected',
-        'host': _host,
-        'port': _port,
-      }));
+            if (payload is Map && payload['type'] == 'session_start') {
+              state.value = state.value.copyWith(
+                lastMessage: raw,
+                status: 'Session ${payload['session'] ?? ''} ready',
+              );
+              return;
+            }
+          } catch (_) {}
+          state.value = state.value.copyWith(lastMessage: raw);
+        },
+        onDone: () {
+          state.value = state.value.copyWith(
+            connected: false,
+            status: 'Disconnected',
+            lastFrameSummary: null,
+          );
+        },
+      );
+      socket.add(
+        jsonEncode({
+          'type': 'ack',
+          'status': 'connected',
+          'host': _host,
+          'port': _port,
+        }),
+      );
     } else {
       request.response.statusCode = HttpStatus.badRequest;
       await request.response.close();
@@ -4921,8 +5168,10 @@ class PairingHost {
       );
       _host = interfaces
           .expand((i) => i.addresses)
-          .firstWhere((a) => !a.isLoopback && a.type == InternetAddressType.IPv4,
-              orElse: () => InternetAddress.loopbackIPv4)
+          .firstWhere(
+            (a) => !a.isLoopback && a.type == InternetAddressType.IPv4,
+            orElse: () => InternetAddress.loopbackIPv4,
+          )
           .address;
       _token = _randomToken();
       _server = await HttpServer.bind(InternetAddress.anyIPv4, 8787);
@@ -4942,9 +5191,7 @@ class PairingHost {
         lastMessage: null,
       );
     } catch (e) {
-      state.value = state.value.copyWith(
-        status: 'Failed to start pairing: $e',
-      );
+      state.value = state.value.copyWith(status: 'Failed to start pairing: $e');
     }
   }
 }
