@@ -3013,7 +3013,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
   }
 
   Future<void> _recordCapture(Uint8List bytes, Rect roi) async {
-    final fringeWidth = await _estimateFringeWidthFromImage(bytes);
+    final fringeMeasurement = await _estimateFringeWidthFromImage(bytes);
     final updated = [
       _CapturedPhoto(
         bytes: bytes,
@@ -3021,7 +3021,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
         summary:
             '${roi.width.toStringAsFixed(0)}x${roi.height.toStringAsFixed(0)} @ (${roi.left.toStringAsFixed(0)}, ${roi.top.toStringAsFixed(0)})',
         temperature: _temperatureValue,
-        fringeWidthPx: fringeWidth,
+        measurement: fringeMeasurement,
       ),
       ..._capturedPhotos.value,
     ];
@@ -3039,7 +3039,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                   createdAt: photo.createdAt,
                   summary: photo.summary,
                   temperature: value,
-                  fringeWidthPx: photo.fringeWidthPx,
+                  measurement: photo.measurement,
                 ),
         )
         .toList();
@@ -3496,14 +3496,14 @@ class _CapturedPhoto {
   final DateTime createdAt;
   final String summary;
   final String? temperature;
-  final double? fringeWidthPx;
+  final _FringeMeasurement? measurement;
 
   const _CapturedPhoto({
     required this.bytes,
     required this.createdAt,
     required this.summary,
     this.temperature,
-    this.fringeWidthPx,
+    this.measurement,
   });
 
   String get timestampLabel {
@@ -3516,8 +3516,13 @@ class _CapturedPhoto {
 
   String get temperatureLabel => temperature ?? '--';
 
-  String get fringeWidthLabel =>
-      fringeWidthPx != null ? '${fringeWidthPx!.toStringAsFixed(1)} px' : '--';
+  String get fringeWidthLabel => measurement != null
+      ? '${measurement!.fringeSpacingPx.toStringAsFixed(1)} px'
+      : '--';
+
+  String get slitWidthLabel => measurement != null
+      ? '${measurement!.slitWidthMm.toStringAsFixed(3)} mm'
+      : '--';
 }
 
 class _MonitorStatus {
@@ -3894,6 +3899,24 @@ class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
                                           const SizedBox(width: 6),
                                           Text(
                                             'Fringe ≈ ${photo.fringeWidthLabel}',
+                                            style: const TextStyle(
+                                              color: Color(0xFF0F172A),
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Row(
+                                        children: [
+                                          const Icon(
+                                            Icons.straighten,
+                                            size: 18,
+                                            color: Color(0xFF2563EB),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            'Slit ≈ ${photo.slitWidthLabel}',
                                             style: const TextStyle(
                                               color: Color(0xFF0F172A),
                                               fontWeight: FontWeight.w600,
@@ -4427,6 +4450,36 @@ class Stats {
   }
 }
 
+class _CalibrationSettings {
+  final double laserWavelengthNm;
+  final double slitToScreenMm;
+  final double pixelPitchMm;
+
+  const _CalibrationSettings({
+    required this.laserWavelengthNm,
+    required this.slitToScreenMm,
+    required this.pixelPitchMm,
+  });
+
+  double get laserWavelengthMm => laserWavelengthNm * 1e-6;
+}
+
+class _FringeMeasurement {
+  final double fringeSpacingPx;
+  final double slitWidthMm;
+
+  const _FringeMeasurement({
+    required this.fringeSpacingPx,
+    required this.slitWidthMm,
+  });
+}
+
+const _calibrationSettings = _CalibrationSettings(
+  laserWavelengthNm: 650,
+  slitToScreenMm: 1000,
+  pixelPitchMm: 0.0014,
+);
+
 Color _hexToColor(String hex) {
   final buffer = StringBuffer();
   if (hex.length == 6) buffer.write('ff');
@@ -4460,7 +4513,7 @@ Color _badgeColor(String badge) {
   }
 }
 
-Future<double?> _estimateFringeWidthFromImage(Uint8List bytes) async {
+Future<_FringeMeasurement?> _estimateFringeWidthFromImage(Uint8List bytes) async {
   try {
     final codec = await instantiateImageCodec(bytes);
     final frame = await codec.getNextFrame();
@@ -4495,9 +4548,28 @@ Future<double?> _estimateFringeWidthFromImage(Uint8List bytes) async {
 
     final minVal = intensities.reduce(min);
     final maxVal = intensities.reduce(max);
-    if (maxVal - minVal < 1) return null;
+    final dynamicRange = maxVal - minVal;
+    if (dynamicRange < 1) return null;
 
-    final threshold = minVal + (maxVal - minVal) * 0.35;
+    // 1) Check for brightness patterns; discard nearly uniform bands.
+    final mean = intensities.reduce((a, b) => a + b) / intensities.length;
+    final variance = intensities
+            .map((v) => pow(v - mean, 2))
+            .reduce((a, b) => a + b) /
+        intensities.length;
+    if (sqrt(variance) < 0.5) return null;
+
+    // 2) Edge detection on the grayscale intensity profile.
+    final gradients = List<double>.filled(width, 0);
+    for (int i = 1; i < width - 1; i++) {
+      gradients[i] = (intensities[i + 1] - intensities[i - 1]) / 2;
+    }
+    final edgeEnergy =
+        gradients.map((g) => g.abs()).reduce((a, b) => a + b) / gradients.length;
+    if (edgeEnergy < 0.2) return null;
+
+    // 3) Detect evenly spaced fringes using peak detection.
+    final threshold = minVal + dynamicRange * 0.35;
     final List<int> peaks = [];
     for (int i = 1; i < intensities.length - 1; i++) {
       final value = intensities[i];
@@ -4510,7 +4582,7 @@ Future<double?> _estimateFringeWidthFromImage(Uint8List bytes) async {
       }
     }
 
-    if (peaks.length < 2) return null;
+    if (peaks.length < 3) return null;
 
     final List<double> spacings = [];
     for (int i = 1; i < peaks.length; i++) {
@@ -4518,10 +4590,28 @@ Future<double?> _estimateFringeWidthFromImage(Uint8List bytes) async {
       if (gap > 2) spacings.add(gap);
     }
 
-    if (spacings.isEmpty) return null;
-    final average =
+    if (spacings.length < 2) return null;
+
+    final averageSpacing =
         spacings.reduce((value, element) => value + element) / spacings.length;
-    return average;
+    final double spacingStdDev = sqrt(spacings
+            .map((s) => pow(s - averageSpacing, 2))
+            .reduce((a, b) => a + b) /
+        spacings.length);
+
+    if (averageSpacing <= 0 || spacingStdDev / averageSpacing > 0.15) {
+      return null;
+    }
+
+    final fringeSpacingMm = averageSpacing * _calibrationSettings.pixelPitchMm;
+    final slitWidthMm = (_calibrationSettings.laserWavelengthMm *
+            _calibrationSettings.slitToScreenMm) /
+        fringeSpacingMm;
+
+    return _FringeMeasurement(
+      fringeSpacingPx: averageSpacing,
+      slitWidthMm: slitWidthMm,
+    );
   } catch (_) {
     return null;
   }
@@ -4962,6 +5052,25 @@ class _PairingCardState extends State<PairingCard> {
                                                                               ),
                                                                             ],
                                                                           ),
+                                                                          const SizedBox(height: 6),
+                                                                          Row(
+                                                                            children: [
+                                                                              const Icon(
+                                                                                Icons.straighten,
+                                                                                size: 18,
+                                                                                color:
+                                                                                    Color(0xFF2563EB),
+                                                                              ),
+                                                                              const SizedBox(width: 6),
+                                                                              Text(
+                                                                                'Slit ≈ ${photo.slitWidthLabel}',
+                                                                                style: const TextStyle(
+                                                                                  color: Color(0xFF0F172A),
+                                                                                  fontWeight: FontWeight.w600,
+                                                                                ),
+                                                                              ),
+                                                                            ],
+                                                                          ),
                                                                         ],
                                                                       ),
                                                                     ),
@@ -5303,11 +5412,11 @@ class PairingHost {
               final summary = pixels != null
                   ? 'ROI ${_fmtNum(pixels['width'])}x${_fmtNum(pixels['height'])} at (${_fmtNum(pixels['x'])}, ${_fmtNum(pixels['y'])})'
                   : 'ROI frame received';
-              final fringeWidth = frameBytes != null
+              final fringeMeasurement = frameBytes != null
                   ? await _estimateFringeWidthFromImage(frameBytes)
                   : null;
-              final detailedSummary = fringeWidth != null
-                  ? '$summary • Fringe ≈ ${fringeWidth.toStringAsFixed(1)} px'
+              final detailedSummary = fringeMeasurement != null
+                  ? '$summary • Fringe ≈ ${fringeMeasurement.fringeSpacingPx.toStringAsFixed(1)} px • Slit ≈ ${fringeMeasurement.slitWidthMm.toStringAsFixed(3)} mm'
                   : summary;
               var frames = state.value.recentFrames;
               if (frameBytes != null) {
@@ -5317,7 +5426,7 @@ class PairingHost {
                     createdAt: DateTime.now(),
                     summary: detailedSummary,
                     temperature: temperature,
-                    fringeWidthPx: fringeWidth,
+                    measurement: fringeMeasurement,
                   ),
                   ...frames,
                 ].take(12).toList();
