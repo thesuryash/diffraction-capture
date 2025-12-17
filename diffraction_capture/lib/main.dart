@@ -3036,6 +3036,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
               ? photo
               : _CapturedPhoto(
                   bytes: photo.bytes,
+                  overlayBytes: photo.overlayBytes,
                   createdAt: photo.createdAt,
                   summary: photo.summary,
                   temperature: value,
@@ -3493,6 +3494,7 @@ class _UploadStat extends StatelessWidget {
 
 class _CapturedPhoto {
   final Uint8List bytes;
+  final Uint8List? overlayBytes;
   final DateTime createdAt;
   final String summary;
   final String? temperature;
@@ -3500,6 +3502,7 @@ class _CapturedPhoto {
 
   const _CapturedPhoto({
     required this.bytes,
+    this.overlayBytes,
     required this.createdAt,
     required this.summary,
     this.temperature,
@@ -4474,6 +4477,16 @@ class _FringeMeasurement {
   });
 }
 
+class _PythonFringeEvaluation {
+  final double? fringeSpacingPx;
+  final Uint8List? overlayBytes;
+
+  const _PythonFringeEvaluation({
+    this.fringeSpacingPx,
+    this.overlayBytes,
+  });
+}
+
 const _calibrationSettings = _CalibrationSettings(
   laserWavelengthNm: 650,
   slitToScreenMm: 1000,
@@ -4603,17 +4616,163 @@ Future<_FringeMeasurement?> _estimateFringeWidthFromImage(Uint8List bytes) async
       return null;
     }
 
-    final fringeSpacingMm = averageSpacing * _calibrationSettings.pixelPitchMm;
-    final slitWidthMm = (_calibrationSettings.laserWavelengthMm *
-            _calibrationSettings.slitToScreenMm) /
-        fringeSpacingMm;
-
-    return _FringeMeasurement(
-      fringeSpacingPx: averageSpacing,
-      slitWidthMm: slitWidthMm,
-    );
+    return _measurementFromSpacing(averageSpacing);
   } catch (_) {
     return null;
+  }
+}
+
+_FringeMeasurement _measurementFromSpacing(double spacingPx) {
+  final fringeSpacingMm = spacingPx * _calibrationSettings.pixelPitchMm;
+  final slitWidthMm = (_calibrationSettings.laserWavelengthMm *
+          _calibrationSettings.slitToScreenMm) /
+      fringeSpacingMm;
+
+  return _FringeMeasurement(
+    fringeSpacingPx: spacingPx,
+    slitWidthMm: slitWidthMm,
+  );
+}
+
+const _pythonFringeScript = r"""
+import json
+import sys
+
+import cv2
+import numpy as np
+
+
+def find_fringe_spacing(gray: np.ndarray):
+    profile = np.mean(gray, axis=0)
+    profile = profile - np.min(profile)
+    max_val = np.max(profile)
+    if max_val > 0:
+        profile = profile / max_val
+
+    threshold = 0.35
+    peaks = []
+    for i in range(1, len(profile) - 1):
+        val = profile[i]
+        if val >= profile[i - 1] and val >= profile[i + 1] and val >= threshold:
+            if not peaks or i - peaks[-1] > 2:
+                peaks.append(i)
+
+    spacings = [peaks[i] - peaks[i - 1] for i in range(1, len(peaks)) if peaks[i] - peaks[i - 1] > 1]
+    if len(spacings) < 2:
+        return None, peaks
+
+    avg = float(np.mean(spacings))
+    std = float(np.std(spacings))
+    if avg <= 0 or (std / avg) > 0.2:
+        return None, peaks
+
+    return avg, peaks
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(json.dumps({"error": "missing image path"}))
+        return
+
+    image_path = sys.argv[1]
+    overlay_path = sys.argv[2] if len(sys.argv) > 2 else None
+
+    image = cv2.imread(image_path)
+    if image is None:
+        print(json.dumps({"error": "unable to read image"}))
+        return
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 50, 150)
+    spacing, peaks = find_fringe_spacing(gray)
+
+    overlay_saved = False
+    if overlay_path:
+        overlay = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+        cv2.addWeighted(image, 0.6, overlay, 0.4, 0, overlay)
+        if peaks:
+            for idx, x in enumerate(peaks):
+                cv2.line(overlay, (x, 0), (x, overlay.shape[0] - 1), (0, 255, 0), 1)
+                if idx > 0:
+                    gap = peaks[idx] - peaks[idx - 1]
+                    label_y = 18 + (idx % 2) * 14
+                    cv2.putText(
+                        overlay,
+                        f"{gap}px",
+                        (int((peaks[idx] + peaks[idx - 1]) / 2), label_y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.45,
+                        (255, 0, 0),
+                        1,
+                        cv2.LINE_AA,
+                    )
+        cv2.imwrite(overlay_path, overlay)
+        overlay_saved = True
+
+    print(
+        json.dumps(
+            {
+                "fringe_spacing_px": spacing,
+                "peaks": peaks,
+                "overlay_saved": overlay_saved,
+            }
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()
+""";
+
+String? _pythonScriptPath;
+
+Future<String> _ensurePythonFringeScript() async {
+  if (_pythonScriptPath != null && File(_pythonScriptPath!).existsSync()) {
+    return _pythonScriptPath!;
+  }
+
+  final scriptDir = await Directory.systemTemp.createTemp('fringe_eval');
+  final scriptFile = File('${scriptDir.path}/fringe_eval.py');
+  await scriptFile.writeAsString(_pythonFringeScript);
+  _pythonScriptPath = scriptFile.path;
+  return _pythonScriptPath!;
+}
+
+Future<_PythonFringeEvaluation?> _runPythonFringeEvaluation(
+    Uint8List imageBytes) async {
+  final scriptPath = await _ensurePythonFringeScript();
+  final workDir = await Directory.systemTemp.createTemp('fringe_eval_frame');
+  final imagePath = '${workDir.path}/frame.png';
+  final overlayPath = '${workDir.path}/overlay.png';
+  await File(imagePath).writeAsBytes(imageBytes);
+
+  try {
+    final result = await Process.run(
+      'python3',
+      [scriptPath, imagePath, overlayPath],
+    );
+
+    if (result.exitCode != 0) {
+      throw Exception('Python evaluation failed: ${result.stderr}');
+    }
+
+    final parsed = jsonDecode(result.stdout.toString());
+    final spacing = parsed is Map && parsed['fringe_spacing_px'] is num
+        ? (parsed['fringe_spacing_px'] as num).toDouble()
+        : null;
+    final overlayFile = File(overlayPath);
+    final overlayBytes = overlayFile.existsSync()
+        ? await overlayFile.readAsBytes()
+        : null;
+
+    return _PythonFringeEvaluation(
+      fringeSpacingPx: spacing,
+      overlayBytes: overlayBytes,
+    );
+  } on ProcessException {
+    throw Exception(
+      'Python or OpenCV is unavailable. Please ensure python3 and cv2 are installed.',
+    );
   }
 }
 
@@ -4627,6 +4786,8 @@ class PairingCard extends StatefulWidget {
 }
 
 class _PairingCardState extends State<PairingCard> {
+  bool _isEvaluating = false;
+
   @override
   void dispose() {
     super.dispose();
@@ -4698,6 +4859,58 @@ class _PairingCardState extends State<PairingCard> {
     );
   }
 
+  Future<void> _evaluateWithPython(PairingServerState state) async {
+    if (_isEvaluating) return;
+
+    setState(() {
+      _isEvaluating = true;
+    });
+
+    final messenger = ScaffoldMessenger.of(context);
+
+    try {
+      final evaluated = <_CapturedPhoto>[];
+      for (final photo in state.recentFrames) {
+        final evaluation = await _runPythonFringeEvaluation(photo.bytes);
+        final measurement = evaluation?.fringeSpacingPx != null
+            ? _measurementFromSpacing(evaluation!.fringeSpacingPx!)
+            : photo.measurement;
+
+        evaluated.add(
+          _CapturedPhoto(
+            bytes: photo.bytes,
+            overlayBytes: evaluation?.overlayBytes ?? photo.overlayBytes,
+            createdAt: photo.createdAt,
+            summary: photo.summary,
+            temperature: photo.temperature,
+            measurement: measurement,
+          ),
+        );
+      }
+
+      PairingHost.instance.state.value =
+          PairingHost.instance.state.value.copyWith(
+        recentFrames: evaluated,
+      );
+
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Evaluated ${evaluated.length} photo(s) with OpenCV.'),
+        ),
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Evaluation failed: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isEvaluating = false;
+        });
+      }
+    }
+  }
+
   Future<void> _openProjectWindow(
     BuildContext context,
     PairingServerState state,
@@ -4746,6 +4959,22 @@ class _PairingCardState extends State<PairingCard> {
                               style: const TextStyle(color: Color(0xFF6B7280)),
                             ),
                           ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton.icon(
+                        onPressed: state.recentFrames.isEmpty || _isEvaluating
+                            ? null
+                            : () => _evaluateWithPython(state),
+                        icon: _isEvaluating
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.play_arrow),
+                        label: Text(
+                          _isEvaluating ? 'Evaluating…' : 'Start evaluate',
                         ),
                       ),
                       IconButton(
@@ -4932,11 +5161,14 @@ class _PairingCardState extends State<PairingCard> {
                                                             final photo =
                                                                 photosByTemperature[temp]![
                                                                     index];
+                                                            final displayBytes =
+                                                                photo.overlayBytes ??
+                                                                    photo.bytes;
                                                             return GestureDetector(
                                                               onTap: () =>
                                                                   _showFramePreview(
                                                                 context,
-                                                                photo.bytes,
+                                                                displayBytes,
                                                                 summary:
                                                                     photo.summary,
                                                               ),
@@ -4966,8 +5198,7 @@ class _PairingCardState extends State<PairingCard> {
                                                                                   10),
                                                                       child: Image
                                                                           .memory(
-                                                                        photo
-                                                                            .bytes,
+                                                                        displayBytes,
                                                                         width:
                                                                             140,
                                                                         height:
