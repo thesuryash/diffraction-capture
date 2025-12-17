@@ -4,7 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:ui';
 import 'dart:typed_data';
-
+// import 'transfer_setup_step.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -3151,7 +3151,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                     size: 12,
                   ),
                   const SizedBox(width: 6),
-                  Text(connected ? 'Connected to desktop' : 'Not connected'),
+                  Text(connected ? 'Connected' : 'Waiting for pairing'),
                   const Spacer(),
                   Row(
                     children: [
@@ -4951,17 +4951,42 @@ class _PairingCardState extends State<PairingCard> {
                                         ],
                                       ),
                                     ),
-                                  if (state.lastFrameSummary != null)
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 12),
-                                      child: Text(
-                                        'Last ROI frame: ${state.lastFrameSummary}',
-                                        style: const TextStyle(
-                                          color: Color(0xFF0F172A),
-                                          fontWeight: FontWeight.w700,
-                                        ),
+                                  if (state.recentFrames.isNotEmpty) ...[
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      '${state.recentFrames.length} photo(s) received. Open the project window to review them.',
+                                      style: const TextStyle(color: Color(0xFF4B5563)),
+                                    ),
+                                  ],
+                                  if (state.lastFrameSummary != null) ...[
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      'Last ROI frame: ${state.lastFrameSummary}',
+                                      style: const TextStyle(
+                                        color: Color(0xFF0F172A),
+                                        fontWeight: FontWeight.w600,
                                       ),
                                     ),
+                                  ],
+                                  if (state.lastFrameBytes != null && state.temperatureLocked) ...[
+                                    const SizedBox(height: 12),
+                                    ElevatedButton.icon(
+                                      onPressed: () {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                              'Evaluation pipeline will run here (OpenCV stub).',
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                      icon: const Icon(Icons.play_arrow),
+                                      label: const Text('Start Evaluating'),
+                                      style: ElevatedButton.styleFrom(
+                                        minimumSize: const Size.fromHeight(44),
+                                      ),
+                                    ),
+                                  ],
                                 ],
                               ),
                             ),
@@ -5044,8 +5069,7 @@ class _PairingCardState extends State<PairingCard> {
                                                           separatorBuilder: (_, __) =>
                                                               const SizedBox(
                                                                   height: 10),
-                                                          itemBuilder:
-                                                              (context, index) {
+                                                          itemBuilder: (context, index) {
                                                             final photo =
                                                                 photosByTemperature[temp]![
                                                                     index];
