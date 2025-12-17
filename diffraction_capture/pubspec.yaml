@@ -39,6 +39,7 @@ dependencies:
   mobile_scanner: ^3.5.5
   qr_flutter: ^4.1.0
   web_socket_channel: ^2.4.0
+  dio: ^5.5.0
 
 dev_dependencies:
   flutter_test:
