@@ -9,6 +9,7 @@ import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:http/http.dart' as http;
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -2747,6 +2748,8 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
   Size? _lastPreviewSize;
   late final bool _livePreviewSupported;
   bool _cameraInitFailed = false;
+  final ImageAnalysisController _analysisController =
+      ImageAnalysisController();
 
   @override
   void dispose() {
@@ -3014,6 +3017,16 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
 
   Future<void> _recordCapture(Uint8List bytes, Rect roi) async {
     final fringeMeasurement = await _estimateFringeWidthFromImage(bytes);
+    final backendResult = await _analysisController.analyze(
+      bytes,
+      onError: (message) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Backend error: $message')),
+          );
+        }
+      },
+    );
     final updated = [
       _CapturedPhoto(
         bytes: bytes,
@@ -3022,6 +3035,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
             '${roi.width.toStringAsFixed(0)}x${roi.height.toStringAsFixed(0)} @ (${roi.left.toStringAsFixed(0)}, ${roi.top.toStringAsFixed(0)})',
         temperature: _temperatureValue,
         measurement: fringeMeasurement,
+        backendAnalysis: backendResult,
       ),
       ..._capturedPhotos.value,
     ];
@@ -3041,6 +3055,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                   summary: photo.summary,
                   temperature: value,
                   measurement: photo.measurement,
+                  backendAnalysis: photo.backendAnalysis,
                 ),
         )
         .toList();
@@ -3499,6 +3514,7 @@ class _CapturedPhoto {
   final String summary;
   final String? temperature;
   final _FringeMeasurement? measurement;
+  final BackendAnalysisResult? backendAnalysis;
 
   const _CapturedPhoto({
     required this.bytes,
@@ -3507,6 +3523,7 @@ class _CapturedPhoto {
     required this.summary,
     this.temperature,
     this.measurement,
+    this.backendAnalysis,
   });
 
   String get timestampLabel {
@@ -3525,6 +3542,14 @@ class _CapturedPhoto {
 
   String get slitWidthLabel => measurement != null
       ? '${measurement!.slitWidthMm.toStringAsFixed(3)} mm'
+      : '--';
+
+  String get widthPixelsLabel => backendAnalysis != null
+      ? '${backendAnalysis!.widthPixels.toStringAsFixed(1)} px'
+      : '--';
+
+  String get widthPhysicalLabel => backendAnalysis != null
+      ? '${backendAnalysis!.widthPhysical.toStringAsFixed(3)} mm'
       : '--';
 }
 
@@ -3927,6 +3952,24 @@ class _TimedCaptureWindowState extends State<TimedCaptureWindow> {
                                           ),
                                         ],
                                       ),
+                                      const SizedBox(height: 6),
+                                      Row(
+                                        children: [
+                                          const Icon(
+                                            Icons.aspect_ratio,
+                                            size: 18,
+                                            color: Color(0xFF2563EB),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            'Width ≈ ${photo.widthPixelsLabel} / ${photo.widthPhysicalLabel}',
+                                            style: const TextStyle(
+                                              color: Color(0xFF0F172A),
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     ],
                                   ),
                                 ),
@@ -4299,6 +4342,84 @@ class ReferenceDataLoader {
       return ReferenceData.fromJson(data);
     } catch (_) {
       return ReferenceData.empty();
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Backend analysis
+// ---------------------------------------------------------------------------
+
+const _backendBaseUrl = String.fromEnvironment(
+  'BACKEND_BASE_URL',
+  defaultValue: 'http://localhost:8000/analyze',
+);
+
+class BackendAnalysisResult {
+  final double widthPixels;
+  final double widthPhysical;
+
+  const BackendAnalysisResult({
+    required this.widthPixels,
+    required this.widthPhysical,
+  });
+
+  factory BackendAnalysisResult.fromJson(Map<String, dynamic> json) {
+    return BackendAnalysisResult(
+      widthPixels: (json['widthPixels'] as num?)?.toDouble() ?? 0,
+      widthPhysical: (json['widthPhysical'] as num?)?.toDouble() ?? 0,
+    );
+  }
+}
+
+class BackendClient {
+  final String baseUrl;
+  final http.Client _client;
+
+  BackendClient({required this.baseUrl, http.Client? client})
+      : _client = client ?? http.Client();
+
+  Future<BackendAnalysisResult> analyzeImage(Uint8List bytes) async {
+    if (baseUrl.isEmpty) {
+      throw Exception('Backend base URL is not configured.');
+    }
+    final uri = Uri.parse(baseUrl);
+    final response = await _client.post(
+      uri,
+      headers: {'Content-Type': 'application/octet-stream'},
+      body: bytes,
+    );
+    if (response.statusCode != 200) {
+      throw Exception(
+          'Backend responded with ${response.statusCode}: ${response.body}');
+    }
+    final data = jsonDecode(response.body);
+    if (data is! Map<String, dynamic>) {
+      throw Exception('Unexpected backend response: ${response.body}');
+    }
+    return BackendAnalysisResult.fromJson(data);
+  }
+}
+
+class ImageAnalysisController {
+  final BackendClient _client;
+
+  ImageAnalysisController({String? baseUrl, http.Client? client})
+      : _client = BackendClient(
+          baseUrl: baseUrl ?? _backendBaseUrl,
+          client: client,
+        );
+
+  Future<BackendAnalysisResult?> analyze(
+    Uint8List imageBytes, {
+    void Function(String message)? onError,
+  }) async {
+    try {
+      final bytes = Uint8List.fromList(imageBytes);
+      return await _client.analyzeImage(bytes);
+    } catch (e) {
+      onError?.call(e.toString());
+      return null;
     }
   }
 }
@@ -4845,6 +4966,7 @@ class _PairingCardState extends State<PairingCard> {
             summary: photo.summary,
             temperature: photo.temperature,
             measurement: measurement,
+            backendAnalysis: photo.backendAnalysis,
           ),
         );
       }
@@ -5263,6 +5385,25 @@ class _PairingCardState extends State<PairingCard> {
                                                                               ),
                                                                             ],
                                                                           ),
+                                                                          const SizedBox(height: 6),
+                                                                          Row(
+                                                                            children: [
+                                                                              const Icon(
+                                                                                Icons.aspect_ratio,
+                                                                                size: 18,
+                                                                                color:
+                                                                                    Color(0xFF2563EB),
+                                                                              ),
+                                                                              const SizedBox(width: 6),
+                                                                              Text(
+                                                                                'Width ≈ ${photo.widthPixelsLabel} / ${photo.widthPhysicalLabel}',
+                                                                                style: const TextStyle(
+                                                                                  color: Color(0xFF0F172A),
+                                                                                  fontWeight: FontWeight.w600,
+                                                                                ),
+                                                                              ),
+                                                                            ],
+                                                                          ),
                                                                         ],
                                                                       ),
                                                                     ),
@@ -5546,6 +5687,7 @@ class PairingHost {
   String _token = '';
   String? _host;
   int _port = 0;
+  final ImageAnalysisController _analysisController = ImageAnalysisController();
 
   String _randomToken() {
     const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -5560,10 +5702,11 @@ class PairingHost {
     return value?.toString() ?? '?';
   }
 
-  void _forwardForAnalysis(Uint8List bytes) {
-    // Placeholder for downstream analysis module integration.
-    // Frames are made available through the state notifier and can be
-    // consumed by future processing pipelines.
+  Future<BackendAnalysisResult?> _forwardForAnalysis(
+    Uint8List bytes, {
+    void Function(String message)? onError,
+  }) {
+    return _analysisController.analyze(bytes, onError: onError);
   }
 
   Future<void> _handleRequest(HttpRequest request) async {
@@ -5607,9 +5750,22 @@ class PairingHost {
               final fringeMeasurement = frameBytes != null
                   ? await _estimateFringeWidthFromImage(frameBytes)
                   : null;
-              final detailedSummary = fringeMeasurement != null
-                  ? '$summary • Fringe ≈ ${fringeMeasurement.fringeSpacingPx.toStringAsFixed(1)} px • Slit ≈ ${fringeMeasurement.slitWidthMm.toStringAsFixed(3)} mm'
-                  : summary;
+              final backendAnalysis = frameBytes != null
+                  ? await _forwardForAnalysis(
+                      frameBytes,
+                      onError: (message) {
+                        state.value =
+                            state.value.copyWith(status: 'Backend error: $message');
+                      },
+                    )
+                  : null;
+              final fringeSummary = fringeMeasurement != null
+                  ? ' • Fringe ≈ ${fringeMeasurement.fringeSpacingPx.toStringAsFixed(1)} px • Slit ≈ ${fringeMeasurement.slitWidthMm.toStringAsFixed(3)} mm'
+                  : '';
+              final backendSummary = backendAnalysis != null
+                  ? ' • Width ≈ ${backendAnalysis.widthPixels.toStringAsFixed(1)} px / ${backendAnalysis.widthPhysical.toStringAsFixed(3)} mm'
+                  : '';
+              final detailedSummary = '$summary$fringeSummary$backendSummary';
               var frames = state.value.recentFrames;
               if (frameBytes != null) {
                 frames = [
@@ -5619,6 +5775,7 @@ class PairingHost {
                     summary: detailedSummary,
                     temperature: temperature,
                     measurement: fringeMeasurement,
+                    backendAnalysis: backendAnalysis,
                   ),
                   ...frames,
                 ].take(12).toList();
@@ -5632,9 +5789,6 @@ class PairingHost {
                 temperatureLocked:
                     temperature != null || state.value.temperatureLocked,
               );
-              if (frameBytes != null) {
-                _forwardForAnalysis(frameBytes);
-              }
               return;
             }
             if (payload is Map && payload['type'] == 'temperature') {
