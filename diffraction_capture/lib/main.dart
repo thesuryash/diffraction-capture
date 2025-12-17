@@ -10,6 +10,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:opencv_dart/opencv_dart.dart' as cv;
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -4477,11 +4478,11 @@ class _FringeMeasurement {
   });
 }
 
-class _PythonFringeEvaluation {
+class _OpenCvFringeEvaluation {
   final double? fringeSpacingPx;
   final Uint8List? overlayBytes;
 
-  const _PythonFringeEvaluation({
+  const _OpenCvFringeEvaluation({
     this.fringeSpacingPx,
     this.overlayBytes,
   });
@@ -4634,107 +4635,50 @@ _FringeMeasurement _measurementFromSpacing(double spacingPx) {
   );
 }
 
-String? _pythonScriptPath;
-String? _pythonExecutable;
-bool _pythonDependenciesVerified = false;
-
-Future<String> _resolvePythonExecutable() async {
-  if (_pythonExecutable != null) return _pythonExecutable!;
-
-  const candidates = ['python3', 'python'];
-  for (final exe in candidates) {
-    try {
-      final result = await Process.run(exe, ['--version']);
-      if (result.exitCode == 0) {
-        _pythonExecutable = exe;
-        return exe;
-      }
-    } catch (_) {
-      continue;
-    }
-  }
-
-  throw Exception(
-    'Python 3 with the OpenCV (cv2) module is required. Please install python and the opencv-python package.',
-  );
-}
-
-Future<void> _ensurePythonDependencies() async {
-  if (_pythonDependenciesVerified) return;
-
-  final python = await _resolvePythonExecutable();
-  try {
-    final result = await Process.run(
-      python,
-      ['-c', 'import cv2,sys; sys.stdout.write(cv2.__version__)'],
-    );
-    if (result.exitCode != 0) {
-      throw Exception(
-        'Python 3 with the OpenCV (cv2) module is required. Please install python and the opencv-python package.',
-      );
-    }
-  } on ProcessException {
-    throw Exception(
-      'Python 3 with the OpenCV (cv2) module is required. Please install python and the opencv-python package.',
-    );
-  }
-
-  _pythonDependenciesVerified = true;
-}
-
-Future<String> _ensurePythonFringeScript() async {
-  if (_pythonScriptPath != null && File(_pythonScriptPath!).existsSync()) {
-    return _pythonScriptPath!;
-  }
-
-  final scriptDir = await Directory.systemTemp.createTemp('fringe_eval');
-  final scriptFile = File('${scriptDir.path}/fringe_eval.py');
-  final pythonScript = await rootBundle.load('assets/python/fringe_eval.py');
-  await scriptFile.writeAsBytes(pythonScript.buffer.asUint8List());
-  _pythonScriptPath = scriptFile.path;
-  return _pythonScriptPath!;
-}
-
-Future<_PythonFringeEvaluation?> _runPythonFringeEvaluation(
+Future<_OpenCvFringeEvaluation?> _runOpenCvFringeEvaluation(
     Uint8List imageBytes) async {
-  await _ensurePythonDependencies();
-  final python = await _resolvePythonExecutable();
-  final scriptPath = await _ensurePythonFringeScript();
   final workDir = await Directory.systemTemp.createTemp('fringe_eval_frame');
   final imagePath = '${workDir.path}/frame.png';
-  final overlayPath = '${workDir.path}/overlay.png';
   await File(imagePath).writeAsBytes(imageBytes);
 
-  try {
-    final result = await Process.run(
-      python,
-      [scriptPath, imagePath, overlayPath],
-    );
+  final src = await cv.imreadAsync(imagePath, flags: cv.IMREAD_COLOR);
+  if (src.empty) return null;
 
-    if (result.exitCode != 0) {
-      throw Exception(
-        'Python evaluation failed. Ensure python with opencv-python (cv2) is installed. ${result.stderr}',
-      );
+  final gray = await cv.cvtColorAsync(src, cv.COLOR_BGR2GRAY);
+  final blurred =
+      await cv.GaussianBlurAsync(gray, ksize: cv.Size(5, 5), sigmaX: 0);
+  final edges = await cv.CannyAsync(blurred, 50, 150);
+
+  final edgesPath = '${workDir.path}/edges.png';
+  await cv.imwriteAsync(edgesPath, edges);
+  final edgeBytes = await File(edgesPath).readAsBytes();
+  final measurement = await _estimateFringeWidthFromImage(edgeBytes);
+
+  Uint8List? overlayBytes;
+  if (measurement != null) {
+    final overlay = await cv.cvtColorAsync(edges, cv.COLOR_GRAY2BGR);
+    final spacing = measurement.fringeSpacingPx.round();
+    if (spacing > 0) {
+      for (int x = spacing; x < overlay.cols; x += spacing) {
+        await cv.lineAsync(
+          overlay,
+          cv.Point(x, 0),
+          cv.Point(x, overlay.rows - 1),
+          color: const cv.Scalar.bgra(0, 255, 255, 255),
+          thickness: 2,
+        );
+      }
     }
 
-    final parsed = jsonDecode(result.stdout.toString());
-    final spacing = parsed is Map && parsed['fringe_spacing_px'] is num
-        ? (parsed['fringe_spacing_px'] as num).toDouble()
-        : null;
-    final overlayFile = File(overlayPath);
-    final overlayBytes = overlayFile.existsSync()
-        ? await overlayFile.readAsBytes()
-        : null;
-
-    return _PythonFringeEvaluation(
-      fringeSpacingPx: spacing,
-      overlayBytes: overlayBytes,
-    );
-  } on ProcessException {
-    throw Exception(
-      'Python or OpenCV is unavailable. Please ensure python and cv2 are installed.',
-    );
+    final overlayPath = '${workDir.path}/overlay.png';
+    await cv.imwriteAsync(overlayPath, overlay);
+    overlayBytes = await File(overlayPath).readAsBytes();
   }
+
+  return _OpenCvFringeEvaluation(
+    fringeSpacingPx: measurement?.fringeSpacingPx,
+    overlayBytes: overlayBytes,
+  );
 }
 
 class PairingCard extends StatefulWidget {
@@ -4820,7 +4764,7 @@ class _PairingCardState extends State<PairingCard> {
     );
   }
 
-  Future<void> _evaluateWithPython(PairingServerState state) async {
+  Future<void> _evaluateWithOpenCv(PairingServerState state) async {
     if (_isEvaluating) return;
 
     setState(() {
@@ -4832,7 +4776,7 @@ class _PairingCardState extends State<PairingCard> {
     try {
       final evaluated = <_CapturedPhoto>[];
       for (final photo in state.recentFrames) {
-        final evaluation = await _runPythonFringeEvaluation(photo.bytes);
+        final evaluation = await _runOpenCvFringeEvaluation(photo.bytes);
         final measurement = evaluation?.fringeSpacingPx != null
             ? _measurementFromSpacing(evaluation!.fringeSpacingPx!)
             : photo.measurement;
@@ -4926,7 +4870,7 @@ class _PairingCardState extends State<PairingCard> {
                       ElevatedButton.icon(
                         onPressed: state.recentFrames.isEmpty || _isEvaluating
                             ? null
-                            : () => _evaluateWithPython(state),
+                            : () => _evaluateWithOpenCv(state),
                         icon: _isEvaluating
                             ? const SizedBox(
                                 width: 16,
