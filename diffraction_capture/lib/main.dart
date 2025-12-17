@@ -3,13 +3,10 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:ui';
-import 'dart:typed_data';
-
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
-import 'package:http/http.dart' as http;
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -59,15 +56,19 @@ class BackendAnalysisResult {
   final double? fringeSpacingPx;
   final double? slitWidthMm;
   final Uint8List? overlayBytes;
+  final double? widthPixels;
+  final double? widthPhysical;
 
   BackendAnalysisResult({
     this.fringeSpacingPx,
     this.slitWidthMm,
     this.overlayBytes,
+    this.widthPixels,
+    this.widthPhysical,
   });
 
   factory BackendAnalysisResult.fromJson(Map json) {
-    double? _numToDouble(dynamic value) {
+    double? numToDouble(dynamic value) {
       if (value is num) return value.toDouble();
       if (value is String) {
         final parsed = double.tryParse(value);
@@ -76,7 +77,7 @@ class BackendAnalysisResult {
       return null;
     }
 
-    Uint8List? _decodeOverlay(dynamic value) {
+    Uint8List? decodeOverlay(dynamic value) {
       if (value is String && value.isNotEmpty) {
         try {
           return base64Decode(value);
@@ -88,9 +89,11 @@ class BackendAnalysisResult {
     }
 
     return BackendAnalysisResult(
-      fringeSpacingPx: _numToDouble(json['fringe_spacing_px'] ?? json['fringeSpacingPx']),
-      slitWidthMm: _numToDouble(json['slit_width_mm'] ?? json['slitWidthMm']),
-      overlayBytes: _decodeOverlay(json['overlay']),
+      fringeSpacingPx: numToDouble(json['fringe_spacing_px'] ?? json['fringeSpacingPx']),
+      slitWidthMm: numToDouble(json['slit_width_mm'] ?? json['slitWidthMm']),
+      overlayBytes: decodeOverlay(json['overlay']),
+      widthPixels: numToDouble(json['width_pixels'] ?? json['widthPixels']),
+      widthPhysical: numToDouble(json['width_physical'] ?? json['widthPhysical']),
     );
   }
 }
@@ -141,9 +144,9 @@ class BackendClient {
 
   String _extractErrorMessage(
     dynamic parsed, {
-    required String fallback,
-    required int statusCode,
-  }) {
+      required String fallback,
+      required int statusCode,
+    }) {
     String? candidate;
     if (parsed is Map) {
       candidate = (parsed['message'] ?? parsed['error'] ?? parsed['detail'])
@@ -170,6 +173,30 @@ class BackendClient {
     }
 
     return candidate;
+  }
+}
+
+class ImageAnalysisController {
+  final BackendClient _client;
+
+  ImageAnalysisController({
+    Uri? baseUri,
+    HttpClient? client,
+  }) : _client = BackendClient(baseUri: baseUri, client: client);
+
+  Future<BackendAnalysisResult?> analyze(
+    Uint8List imageBytes, {
+    void Function(String message)? onError,
+  }) async {
+    try {
+      return await _client.analyzeCapture(imageBytes);
+    } on BackendException catch (e) {
+      onError?.call(e.message);
+      return null;
+    } catch (e) {
+      onError?.call('Unable to analyze image: $e');
+      return null;
+    }
   }
 }
 
@@ -3671,13 +3698,15 @@ class _CapturedPhoto {
       ? '${measurement!.slitWidthMm.toStringAsFixed(3)} mm'
       : '--';
 
-  String get widthPixelsLabel => backendAnalysis != null
-      ? '${backendAnalysis!.widthPixels.toStringAsFixed(1)} px'
-      : '--';
+  String get widthPixelsLabel {
+    final width = backendAnalysis?.widthPixels;
+    return width != null ? '${width.toStringAsFixed(1)} px' : '--';
+  }
 
-  String get widthPhysicalLabel => backendAnalysis != null
-      ? '${backendAnalysis!.widthPhysical.toStringAsFixed(3)} mm'
-      : '--';
+  String get widthPhysicalLabel {
+    final width = backendAnalysis?.widthPhysical;
+    return width != null ? '${width.toStringAsFixed(3)} mm' : '--';
+  }
 }
 
 class _MonitorStatus {
@@ -4469,84 +4498,6 @@ class ReferenceDataLoader {
       return ReferenceData.fromJson(data);
     } catch (_) {
       return ReferenceData.empty();
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Backend analysis
-// ---------------------------------------------------------------------------
-
-const _backendBaseUrl = String.fromEnvironment(
-  'BACKEND_BASE_URL',
-  defaultValue: 'http://localhost:8000/analyze',
-);
-
-class BackendAnalysisResult {
-  final double widthPixels;
-  final double widthPhysical;
-
-  const BackendAnalysisResult({
-    required this.widthPixels,
-    required this.widthPhysical,
-  });
-
-  factory BackendAnalysisResult.fromJson(Map<String, dynamic> json) {
-    return BackendAnalysisResult(
-      widthPixels: (json['widthPixels'] as num?)?.toDouble() ?? 0,
-      widthPhysical: (json['widthPhysical'] as num?)?.toDouble() ?? 0,
-    );
-  }
-}
-
-class BackendClient {
-  final String baseUrl;
-  final http.Client _client;
-
-  BackendClient({required this.baseUrl, http.Client? client})
-      : _client = client ?? http.Client();
-
-  Future<BackendAnalysisResult> analyzeImage(Uint8List bytes) async {
-    if (baseUrl.isEmpty) {
-      throw Exception('Backend base URL is not configured.');
-    }
-    final uri = Uri.parse(baseUrl);
-    final response = await _client.post(
-      uri,
-      headers: {'Content-Type': 'application/octet-stream'},
-      body: bytes,
-    );
-    if (response.statusCode != 200) {
-      throw Exception(
-          'Backend responded with ${response.statusCode}: ${response.body}');
-    }
-    final data = jsonDecode(response.body);
-    if (data is! Map<String, dynamic>) {
-      throw Exception('Unexpected backend response: ${response.body}');
-    }
-    return BackendAnalysisResult.fromJson(data);
-  }
-}
-
-class ImageAnalysisController {
-  final BackendClient _client;
-
-  ImageAnalysisController({String? baseUrl, http.Client? client})
-      : _client = BackendClient(
-          baseUrl: baseUrl ?? _backendBaseUrl,
-          client: client,
-        );
-
-  Future<BackendAnalysisResult?> analyze(
-    Uint8List imageBytes, {
-    void Function(String message)? onError,
-  }) async {
-    try {
-      final bytes = Uint8List.fromList(imageBytes);
-      return await _client.analyzeImage(bytes);
-    } catch (e) {
-      onError?.call(e.toString());
-      return null;
     }
   }
 }
@@ -5984,9 +5935,15 @@ class PairingHost {
               final fringeSummary = fringeMeasurement != null
                   ? ' • Fringe ≈ ${fringeMeasurement.fringeSpacingPx.toStringAsFixed(1)} px • Slit ≈ ${fringeMeasurement.slitWidthMm.toStringAsFixed(3)} mm'
                   : '';
-              final backendSummary = backendAnalysis != null
-                  ? ' • Width ≈ ${backendAnalysis.widthPixels.toStringAsFixed(1)} px / ${backendAnalysis.widthPhysical.toStringAsFixed(3)} mm'
-                  : '';
+              final backendSummary = () {
+                final widthPixels = backendAnalysis?.widthPixels;
+                if (widthPixels == null) return '';
+                final widthPhysical = backendAnalysis?.widthPhysical;
+                final physicalSegment = widthPhysical != null
+                    ? ' / ${widthPhysical.toStringAsFixed(3)} mm'
+                    : '';
+                return ' • Width ≈ ${widthPixels.toStringAsFixed(1)} px$physicalSegment';
+              }();
               final detailedSummary = '$summary$fringeSummary$backendSummary';
               var frames = state.value.recentFrames;
               if (frameBytes != null) {
