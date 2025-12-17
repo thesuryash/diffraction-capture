@@ -6,10 +6,12 @@ import 'dart:ui';
 import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:path/path.dart' as p;
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -4748,6 +4750,7 @@ class PairingCard extends StatefulWidget {
 
 class _PairingCardState extends State<PairingCard> {
   bool _isEvaluating = false;
+  bool _isExporting = false;
 
   @override
   void dispose() {
@@ -4872,6 +4875,88 @@ class _PairingCardState extends State<PairingCard> {
     }
   }
 
+  Future<void> _exportSession(PairingServerState state) async {
+    if (_isExporting) return;
+    if (state.recentFrames.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No captures available to export.')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isExporting = true;
+    });
+
+    final messenger = ScaffoldMessenger.of(context);
+
+    try {
+      final directory = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: 'Select export location',
+      );
+
+      if (directory == null) {
+        return;
+      }
+
+      final sessionName = widget.activeProject?.name ?? 'Session';
+      final safeName = sessionName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+      final exportDir = Directory(p.join(directory, safeName));
+      await exportDir.create(recursive: true);
+
+      final Map<String, List<_CapturedPhoto>> photosByTemperature = {};
+      for (final photo in state.recentFrames) {
+        final key = photo.temperatureLabel;
+        photosByTemperature.putIfAbsent(key, () => []).add(photo);
+      }
+      final temperatureKeys = photosByTemperature.keys.toList();
+
+      final summary = StringBuffer()
+        ..writeln('Session export: $sessionName')
+        ..writeln('Exported at: ${DateTime.now().toIso8601String()}')
+        ..writeln('Total captures: ${state.recentFrames.length}')
+        ..writeln('Temperatures: ${temperatureKeys.isEmpty ? 'None' : temperatureKeys.join(', ')}')
+        ..writeln()
+        ..writeln('Each subfolder contains the captures for that temperature.');
+
+      await File(p.join(exportDir.path, 'README.txt')).writeAsString(
+        summary.toString(),
+      );
+
+      for (final temp in temperatureKeys) {
+        final dirName = temp == '--' ? 'No_Temperature' : '${temp}_C';
+        final tempDir = Directory(p.join(exportDir.path, dirName));
+        await tempDir.create(recursive: true);
+
+        final photos = photosByTemperature[temp] ?? [];
+        for (var i = 0; i < photos.length; i++) {
+          final photo = photos[i];
+          final sanitizedTimestamp =
+              photo.timestampLabel.replaceAll(RegExp(r'[^0-9-]'), '-');
+          final filename =
+              'capture_${i + 1}_${sanitizedTimestamp.padLeft(8, '0')}.png';
+          final bytes = photo.overlayBytes ?? photo.bytes;
+          final file = File(p.join(tempDir.path, filename));
+          await file.writeAsBytes(bytes, flush: true);
+        }
+      }
+
+      messenger.showSnackBar(
+        SnackBar(content: Text('Exported captures to ${exportDir.path}')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Export failed: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isExporting = false;
+        });
+      }
+    }
+  }
+
   Future<void> _openProjectWindow(
     BuildContext context,
     PairingServerState state,
@@ -4936,6 +5021,22 @@ class _PairingCardState extends State<PairingCard> {
                             : const Icon(Icons.play_arrow),
                         label: Text(
                           _isEvaluating ? 'Evaluating…' : 'Start evaluate',
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton.icon(
+                        onPressed: state.recentFrames.isEmpty || _isExporting
+                            ? null
+                            : () => _exportSession(state),
+                        icon: _isExporting
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.file_download_outlined),
+                        label: Text(
+                          _isExporting ? 'Exporting…' : 'Export captures',
                         ),
                       ),
                       IconButton(
@@ -5434,25 +5535,6 @@ class _PairingCardState extends State<PairingCard> {
                   style: const TextStyle(
                     color: Color(0xFF0F172A),
                     fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-              if (state.lastFrameBytes != null && state.temperatureLocked) ...[
-                const SizedBox(height: 12),
-                ElevatedButton.icon(
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Evaluation pipeline will run here (OpenCV stub).',
-                        ),
-                      ),
-                    );
-                  },
-                  icon: const Icon(Icons.play_arrow),
-                  label: const Text('Start Evaluating'),
-                  style: ElevatedButton.styleFrom(
-                    minimumSize: const Size.fromHeight(44),
                   ),
                 ),
               ],
