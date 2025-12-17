@@ -4634,22 +4634,48 @@ _FringeMeasurement _measurementFromSpacing(double spacingPx) {
   );
 }
 
-  String? _pythonScriptPath;
-  bool _pythonDependenciesVerified = false;
+String? _pythonScriptPath;
+String? _pythonExecutable;
+bool _pythonDependenciesVerified = false;
+
+Future<String> _resolvePythonExecutable() async {
+  if (_pythonExecutable != null) return _pythonExecutable!;
+
+  const candidates = ['python3', 'python'];
+  for (final exe in candidates) {
+    try {
+      final result = await Process.run(exe, ['--version']);
+      if (result.exitCode == 0) {
+        _pythonExecutable = exe;
+        return exe;
+      }
+    } catch (_) {
+      continue;
+    }
+  }
+
+  throw Exception(
+    'Python 3 with the OpenCV (cv2) module is required. Please install python and the opencv-python package.',
+  );
+}
 
 Future<void> _ensurePythonDependencies() async {
   if (_pythonDependenciesVerified) return;
 
+  final python = await _resolvePythonExecutable();
   try {
-    final result = await Process.run('python3', ['-c', 'import cv2']);
+    final result = await Process.run(
+      python,
+      ['-c', 'import cv2,sys; sys.stdout.write(cv2.__version__)'],
+    );
     if (result.exitCode != 0) {
       throw Exception(
-        'Python3 with the OpenCV (cv2) module is required. Please install python3 and opencv-python.',
+        'Python 3 with the OpenCV (cv2) module is required. Please install python and the opencv-python package.',
       );
     }
   } on ProcessException {
     throw Exception(
-      'Python3 with the OpenCV (cv2) module is required. Please install python3 and opencv-python.',
+      'Python 3 with the OpenCV (cv2) module is required. Please install python and the opencv-python package.',
     );
   }
 
@@ -4672,6 +4698,7 @@ Future<String> _ensurePythonFringeScript() async {
 Future<_PythonFringeEvaluation?> _runPythonFringeEvaluation(
     Uint8List imageBytes) async {
   await _ensurePythonDependencies();
+  final python = await _resolvePythonExecutable();
   final scriptPath = await _ensurePythonFringeScript();
   final workDir = await Directory.systemTemp.createTemp('fringe_eval_frame');
   final imagePath = '${workDir.path}/frame.png';
@@ -4680,13 +4707,13 @@ Future<_PythonFringeEvaluation?> _runPythonFringeEvaluation(
 
   try {
     final result = await Process.run(
-      'python3',
+      python,
       [scriptPath, imagePath, overlayPath],
     );
 
     if (result.exitCode != 0) {
       throw Exception(
-        'Python evaluation failed. Ensure python3 and opencv-python (cv2) are installed. ${result.stderr}',
+        'Python evaluation failed. Ensure python with opencv-python (cv2) is installed. ${result.stderr}',
       );
     }
 
@@ -4705,7 +4732,7 @@ Future<_PythonFringeEvaluation?> _runPythonFringeEvaluation(
     );
   } on ProcessException {
     throw Exception(
-      'Python or OpenCV is unavailable. Please ensure python3 and cv2 are installed.',
+      'Python or OpenCV is unavailable. Please ensure python and cv2 are installed.',
     );
   }
 }
