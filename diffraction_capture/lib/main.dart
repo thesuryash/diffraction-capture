@@ -4,13 +4,14 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:ui';
 import 'dart:typed_data';
-
+// import 'transfer_setup_step.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:opencv_dart/opencv_dart.dart' as cv;
+// import 'package:opencv_dart/opencv_dart.dart' as cv;
+import 'package:dartcv4/dartcv.dart' as cv;
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -1627,7 +1628,7 @@ class _NewSessionFlowState extends State<NewSessionFlow> {
         isConnected: pairingConnected,
         errorText: pairingError,
       ),
-      const _TransferSetupStep(),
+      _TransferSetupStep(),
     ];
 
     return Scaffold(
@@ -2152,25 +2153,6 @@ class _PairingStepState extends State<_PairingStep> {
             ),
           ],
         ),
-      ],
-    );
-  }
-}
-
-class _TransferSetupStep extends StatelessWidget {
-  const _TransferSetupStep();
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: const [
-        Text(
-          'Transfer Setup',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-        ),
-        SizedBox(height: 12),
-        Text('Ensure upload path exists before capture. Configure as needed.'),
       ],
     );
   }
@@ -3168,7 +3150,7 @@ class _ActiveCaptureScreenState extends State<ActiveCaptureScreen> {
                     size: 12,
                   ),
                   const SizedBox(width: 6),
-                  Text(connected ? 'Connected to desktop' : 'Not connected'),
+                  Text(connected ? 'Connected' : 'Waiting for pairing'),
                   const Spacer(),
                   Row(
                     children: [
@@ -4641,13 +4623,13 @@ Future<_OpenCvFringeEvaluation?> _runOpenCvFringeEvaluation(
   final imagePath = '${workDir.path}/frame.png';
   await File(imagePath).writeAsBytes(imageBytes);
 
-  final src = await cv.imreadAsync(imagePath, flags: cv.IMREAD_COLOR);
-  if (src.empty) return null;
+  final src = await cv.imreadAsync(imagePath);
+  if (src.isEmpty) return null;
 
   final gray = await cv.cvtColorAsync(src, cv.COLOR_BGR2GRAY);
   final blurred =
-      await cv.GaussianBlurAsync(gray, ksize: cv.Size(5, 5), sigmaX: 0);
-  final edges = await cv.CannyAsync(blurred, 50, 150);
+      await cv.gaussianBlurAsync(gray, (5, 5), 0);
+  final edges = await cv.cannyAsync(blurred, 50, 150);
 
   final edgesPath = '${workDir.path}/edges.png';
   await cv.imwriteAsync(edgesPath, edges);
@@ -4664,8 +4646,7 @@ Future<_OpenCvFringeEvaluation?> _runOpenCvFringeEvaluation(
           overlay,
           cv.Point(x, 0),
           cv.Point(x, overlay.rows - 1),
-          color: const cv.Scalar.bgra(0, 255, 255, 255),
-          thickness: 2,
+          cv.Scalar(0, 255, 255, 255),
         );
       }
     }
@@ -4968,17 +4949,42 @@ class _PairingCardState extends State<PairingCard> {
                                         ],
                                       ),
                                     ),
-                                  if (state.lastFrameSummary != null)
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 12),
-                                      child: Text(
-                                        'Last ROI frame: ${state.lastFrameSummary}',
-                                        style: const TextStyle(
-                                          color: Color(0xFF0F172A),
-                                          fontWeight: FontWeight.w700,
-                                        ),
+                                  if (state.recentFrames.isNotEmpty) ...[
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      '${state.recentFrames.length} photo(s) received. Open the project window to review them.',
+                                      style: const TextStyle(color: Color(0xFF4B5563)),
+                                    ),
+                                  ],
+                                  if (state.lastFrameSummary != null) ...[
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      'Last ROI frame: ${state.lastFrameSummary}',
+                                      style: const TextStyle(
+                                        color: Color(0xFF0F172A),
+                                        fontWeight: FontWeight.w600,
                                       ),
                                     ),
+                                  ],
+                                  if (state.lastFrameBytes != null && state.temperatureLocked) ...[
+                                    const SizedBox(height: 12),
+                                    ElevatedButton.icon(
+                                      onPressed: () {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                              'Evaluation pipeline will run here (OpenCV stub).',
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                      icon: const Icon(Icons.play_arrow),
+                                      label: const Text('Start Evaluating'),
+                                      style: ElevatedButton.styleFrom(
+                                        minimumSize: const Size.fromHeight(44),
+                                      ),
+                                    ),
+                                  ],
                                 ],
                               ),
                             ),
@@ -5061,8 +5067,7 @@ class _PairingCardState extends State<PairingCard> {
                                                           separatorBuilder: (_, __) =>
                                                               const SizedBox(
                                                                   height: 10),
-                                                          itemBuilder:
-                                                              (context, index) {
+                                                          itemBuilder: (context, index) {
                                                             final photo =
                                                                 photosByTemperature[temp]![
                                                                     index];
