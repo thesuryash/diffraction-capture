@@ -45,6 +45,133 @@ class DiffractionApp extends StatelessWidget {
   }
 }
 
+class BackendException implements Exception {
+  final String message;
+
+  BackendException(this.message);
+
+  @override
+  String toString() => message;
+}
+
+class BackendAnalysisResult {
+  final double? fringeSpacingPx;
+  final double? slitWidthMm;
+  final Uint8List? overlayBytes;
+
+  BackendAnalysisResult({
+    this.fringeSpacingPx,
+    this.slitWidthMm,
+    this.overlayBytes,
+  });
+
+  factory BackendAnalysisResult.fromJson(Map json) {
+    double? _numToDouble(dynamic value) {
+      if (value is num) return value.toDouble();
+      if (value is String) {
+        final parsed = double.tryParse(value);
+        if (parsed != null) return parsed;
+      }
+      return null;
+    }
+
+    Uint8List? _decodeOverlay(dynamic value) {
+      if (value is String && value.isNotEmpty) {
+        try {
+          return base64Decode(value);
+        } catch (_) {
+          return null;
+        }
+      }
+      return null;
+    }
+
+    return BackendAnalysisResult(
+      fringeSpacingPx: _numToDouble(json['fringe_spacing_px'] ?? json['fringeSpacingPx']),
+      slitWidthMm: _numToDouble(json['slit_width_mm'] ?? json['slitWidthMm']),
+      overlayBytes: _decodeOverlay(json['overlay']),
+    );
+  }
+}
+
+class BackendClient {
+  final Uri baseUri;
+  final HttpClient _client;
+
+  BackendClient({Uri? baseUri, HttpClient? client})
+      : baseUri = baseUri ?? Uri.parse('http://localhost:8000'),
+        _client = client ?? HttpClient();
+
+  Future<BackendAnalysisResult> analyzeCapture(
+    Uint8List bytes, {
+    double? pixelSize,
+  }) async {
+    final uri = baseUri.resolve('/analyze');
+
+    try {
+      final request = await _client.postUrl(uri);
+      request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
+      request.add(utf8.encode(jsonEncode({
+        'image': base64Encode(bytes),
+        if (pixelSize != null) 'pixel_size': pixelSize,
+      })));
+
+      final response = await request.close();
+      final body = await utf8.decodeStream(response);
+      final parsedBody = body.isNotEmpty ? jsonDecode(body) : null;
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return BackendAnalysisResult.fromJson(
+          parsedBody is Map ? parsedBody : <String, dynamic>{},
+        );
+      }
+
+      throw BackendException(_extractErrorMessage(
+        parsedBody,
+        fallback: body,
+        statusCode: response.statusCode,
+      ));
+    } on BackendException {
+      rethrow;
+    } catch (e) {
+      throw BackendException('Unable to reach analysis backend: $e');
+    }
+  }
+
+  String _extractErrorMessage(
+    dynamic parsed, {
+    required String fallback,
+    required int statusCode,
+  }) {
+    String? candidate;
+    if (parsed is Map) {
+      candidate = (parsed['message'] ?? parsed['error'] ?? parsed['detail'])
+          ?.toString();
+      if (candidate == null && parsed['data'] is Map) {
+        final data = parsed['data'] as Map;
+        candidate = (data['message'] ?? data['error'] ?? data['detail'])
+            ?.toString();
+      }
+    } else if (parsed is String) {
+      candidate = parsed;
+    }
+
+    candidate ??= fallback.trim().isNotEmpty
+        ? fallback
+        : 'Backend responded with status $statusCode.';
+
+    final normalized = candidate.toLowerCase();
+    if (normalized.contains('dark')) {
+      return 'Image too dark. Please capture a brighter frame.';
+    }
+    if (normalized.contains('pixel size') || normalized.contains('pixel_size')) {
+      return 'Provide pixel size > 0 to continue.';
+    }
+
+    return candidate;
+  }
+}
+
 class RoiState extends ChangeNotifier {
   static final Rect defaultNormalizedRect = Rect.fromLTWH(0.2, 0.2, 0.6, 0.6);
 
@@ -4748,10 +4875,21 @@ class PairingCard extends StatefulWidget {
 
 class _PairingCardState extends State<PairingCard> {
   bool _isEvaluating = false;
+  String? _analysisErrorMessage;
+  final BackendClient _backendClient = BackendClient();
 
   @override
   void dispose() {
     super.dispose();
+  }
+
+  Uri? _backendBaseUri(PairingServerState state) {
+    if (state.displayHost.isEmpty) return null;
+    final uri = Uri.tryParse(state.displayHost);
+    if (uri == null) return null;
+
+    final scheme = uri.scheme == 'wss' || uri.scheme == 'https' ? 'https' : 'http';
+    return uri.replace(scheme: scheme, path: '');
   }
 
   void _showFramePreview(
@@ -4820,33 +4958,57 @@ class _PairingCardState extends State<PairingCard> {
     );
   }
 
-  Future<void> _evaluateWithPython(PairingServerState state) async {
+  Future<void> _evaluateWithBackend(PairingServerState state) async {
     if (_isEvaluating) return;
 
     setState(() {
       _isEvaluating = true;
+      _analysisErrorMessage = null;
     });
 
     final messenger = ScaffoldMessenger.of(context);
+    final backend = _backendBaseUri(state);
+    final client = backend != null
+        ? BackendClient(baseUri: backend)
+        : _backendClient;
 
     try {
       final evaluated = <_CapturedPhoto>[];
       for (final photo in state.recentFrames) {
-        final evaluation = await _runPythonFringeEvaluation(photo.bytes);
-        final measurement = evaluation?.fringeSpacingPx != null
-            ? _measurementFromSpacing(evaluation!.fringeSpacingPx!)
-            : photo.measurement;
+        try {
+          final evaluation = await client.analyzeCapture(
+            photo.bytes,
+            pixelSize: _calibrationSettings.pixelPitchMm > 0
+                ? _calibrationSettings.pixelPitchMm
+                : null,
+          );
+          final measurement = evaluation.slitWidthMm != null
+              ? _FringeMeasurement(
+                  fringeSpacingPx:
+                      evaluation.fringeSpacingPx ?? photo.measurement?.fringeSpacingPx ?? 0,
+                  slitWidthMm: evaluation.slitWidthMm!,
+                )
+              : evaluation.fringeSpacingPx != null
+                  ? _measurementFromSpacing(evaluation.fringeSpacingPx!)
+                  : photo.measurement;
 
-        evaluated.add(
-          _CapturedPhoto(
-            bytes: photo.bytes,
-            overlayBytes: evaluation?.overlayBytes ?? photo.overlayBytes,
-            createdAt: photo.createdAt,
-            summary: photo.summary,
-            temperature: photo.temperature,
-            measurement: measurement,
-          ),
-        );
+          evaluated.add(
+            _CapturedPhoto(
+              bytes: photo.bytes,
+              overlayBytes: evaluation.overlayBytes ?? photo.overlayBytes,
+              createdAt: photo.createdAt,
+              summary: photo.summary,
+              temperature: photo.temperature,
+              measurement: measurement,
+            ),
+          );
+        } on BackendException catch (e) {
+          setState(() => _analysisErrorMessage = e.message);
+          messenger.showSnackBar(
+            SnackBar(content: Text(e.message)),
+          );
+          return;
+        }
       }
 
       PairingHost.instance.state.value =
@@ -4856,12 +5018,19 @@ class _PairingCardState extends State<PairingCard> {
 
       messenger.showSnackBar(
         SnackBar(
-          content: Text('Evaluated ${evaluated.length} photo(s) with OpenCV.'),
+          content: Text('Analyzed ${evaluated.length} photo(s) with backend.'),
         ),
       );
-    } catch (e) {
+    } on BackendException catch (e) {
+      setState(() => _analysisErrorMessage = e.message);
       messenger.showSnackBar(
-        SnackBar(content: Text('Evaluation failed: $e')),
+        SnackBar(content: Text(e.message)),
+      );
+    } catch (e) {
+      const fallback = 'Unable to analyze captures. Please try again.';
+      setState(() => _analysisErrorMessage = fallback);
+      messenger.showSnackBar(
+        SnackBar(content: Text('$fallback ($e)')),
       );
     } finally {
       if (mounted) {
@@ -4926,7 +5095,7 @@ class _PairingCardState extends State<PairingCard> {
                       ElevatedButton.icon(
                         onPressed: state.recentFrames.isEmpty || _isEvaluating
                             ? null
-                            : () => _evaluateWithPython(state),
+                            : () => _evaluateWithBackend(state),
                         icon: _isEvaluating
                             ? const SizedBox(
                                 width: 16,
@@ -4935,7 +5104,7 @@ class _PairingCardState extends State<PairingCard> {
                               )
                             : const Icon(Icons.play_arrow),
                         label: Text(
-                          _isEvaluating ? 'Evaluating…' : 'Start evaluate',
+                          _isEvaluating ? 'Analyzing…' : 'Analyze captures',
                         ),
                       ),
                       IconButton(
@@ -4944,6 +5113,44 @@ class _PairingCardState extends State<PairingCard> {
                       ),
                     ],
                   ),
+                  if (_analysisErrorMessage != null) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFEE2E2),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(
+                            Icons.error_outline,
+                            color: Color(0xFFB91C1C),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _analysisErrorMessage!,
+                              style: const TextStyle(
+                                color: Color(0xFF991B1B),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () =>
+                                setState(() => _analysisErrorMessage = null),
+                            icon: const Icon(
+                              Icons.close,
+                              color: Color(0xFF991B1B),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 16),
                   Expanded(
                     child: Row(
